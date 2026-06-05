@@ -47,14 +47,22 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const dateFields = ['carte_conducteur_validite', 'vehicule_date_1ere_immat', 'vehicule_date_controle_technique', 'date_embauche'];
     const payload: Partial<Chauffeur> = {
       ...form,
       ligne_id: form.ligne_id || null,
       vehicule_places: form.vehicule_places || 0,
       pin_android: form.is_coordinateur ? (form.pin_android || null) : null,
     };
+    for (const field of dateFields) {
+      if (!(payload as Record<string, unknown>)[field]) {
+        (payload as Record<string, unknown>)[field] = null;
+      }
+    }
     if (!form.pin && chauffeur) {
       delete (payload as Record<string, unknown>).pin;
+    } else if (!form.pin && !chauffeur) {
+      (payload as Record<string, unknown>).pin = '1234';
     }
     onSave(payload);
   }
