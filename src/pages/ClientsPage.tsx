@@ -7,12 +7,23 @@ import type { User } from '@supabase/supabase-js';
 interface Client {
   id: string;
   nom: string;
-  prenom: string;
   telephone: string;
   email: string;
   adresse: string;
   societe: string;
   notes: string;
+  contact1_nom: string;
+  contact1_telephone: string;
+  contact1_email: string;
+  contact1_fonction: string;
+  contact2_nom: string;
+  contact2_telephone: string;
+  contact2_email: string;
+  contact2_fonction: string;
+  contact3_nom: string;
+  contact3_telephone: string;
+  contact3_email: string;
+  contact3_fonction: string;
 }
 
 interface Course {
@@ -68,7 +79,10 @@ export function ClientsPage({ user }: ClientsPageProps) {
   const [showReportWizard, setShowReportWizard] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
   const [form, setForm] = useState({
-    nom: '', prenom: '', telephone: '', email: '', adresse: '', societe: '', notes: '',
+    nom: '', telephone: '', email: '', adresse: '', societe: '', notes: '',
+    contact1_nom: '', contact1_telephone: '', contact1_email: '', contact1_fonction: '',
+    contact2_nom: '', contact2_telephone: '', contact2_email: '', contact2_fonction: '',
+    contact3_nom: '', contact3_telephone: '', contact3_email: '', contact3_fonction: '',
   });
 
   useEffect(() => { loadClients(); loadCourses(); loadLignes(); }, []);
@@ -89,13 +103,22 @@ export function ClientsPage({ user }: ClientsPageProps) {
   }
 
   function openCreate() {
-    setForm({ nom: '', prenom: '', telephone: '', email: '', adresse: '', societe: '', notes: '' });
+    setForm({ nom: '', telephone: '', email: '', adresse: '', societe: '', notes: '',
+      contact1_nom: '', contact1_telephone: '', contact1_email: '', contact1_fonction: '',
+      contact2_nom: '', contact2_telephone: '', contact2_email: '', contact2_fonction: '',
+      contact3_nom: '', contact3_telephone: '', contact3_email: '', contact3_fonction: '',
+    });
     setEditing(null);
     setShowForm(true);
   }
 
   function openEdit(c: Client) {
-    setForm({ nom: c.nom, prenom: c.prenom, telephone: c.telephone, email: c.email, adresse: c.adresse, societe: c.societe, notes: c.notes });
+    setForm({
+      nom: c.nom, telephone: c.telephone, email: c.email, adresse: c.adresse, societe: c.societe, notes: c.notes,
+      contact1_nom: c.contact1_nom || '', contact1_telephone: c.contact1_telephone || '', contact1_email: c.contact1_email || '', contact1_fonction: c.contact1_fonction || '',
+      contact2_nom: c.contact2_nom || '', contact2_telephone: c.contact2_telephone || '', contact2_email: c.contact2_email || '', contact2_fonction: c.contact2_fonction || '',
+      contact3_nom: c.contact3_nom || '', contact3_telephone: c.contact3_telephone || '', contact3_email: c.contact3_email || '', contact3_fonction: c.contact3_fonction || '',
+    });
     setEditing(c);
     setShowForm(true);
   }
@@ -123,7 +146,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
   }
 
   const filtered = clients.filter((c) =>
-    `${c.nom} ${c.prenom} ${c.telephone} ${c.societe}`.toLowerCase().includes(search.toLowerCase())
+    `${c.nom} ${c.telephone} ${c.societe} ${c.contact1_nom} ${c.contact2_nom}`.toLowerCase().includes(search.toLowerCase())
   );
 
   const periodStart = useMemo(() => getPeriodStart(period), [period]);
@@ -162,7 +185,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-gray-900">{selectedClient.prenom} {selectedClient.nom}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{selectedClient.nom}</h1>
             <div className="flex items-center gap-4 mt-1">
               {selectedClient.societe && <span className="flex items-center gap-1 text-sm text-gray-500"><Building className="w-3.5 h-3.5" />{selectedClient.societe}</span>}
               {selectedClient.telephone && <span className="flex items-center gap-1 text-sm text-gray-500"><Phone className="w-3.5 h-3.5" />{selectedClient.telephone}</span>}
@@ -178,6 +201,42 @@ export function ClientsPage({ user }: ClientsPageProps) {
             </button>
           </div>
         </div>
+
+        {/* Contacts */}
+        {(selectedClient.contact1_nom || selectedClient.contact2_nom || selectedClient.contact3_nom) && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Contacts</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {selectedClient.contact1_nom && (
+                <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg">
+                  <p className="text-xs font-semibold text-amber-700 mb-1">Principal</p>
+                  <p className="text-sm font-medium text-gray-900">{selectedClient.contact1_nom}</p>
+                  {selectedClient.contact1_fonction && <p className="text-xs text-gray-500">{selectedClient.contact1_fonction}</p>}
+                  {selectedClient.contact1_telephone && <p className="text-xs text-gray-600 mt-1 flex items-center gap-1"><Phone className="w-3 h-3" />{selectedClient.contact1_telephone}</p>}
+                  {selectedClient.contact1_email && <p className="text-xs text-gray-600 flex items-center gap-1"><Mail className="w-3 h-3" />{selectedClient.contact1_email}</p>}
+                </div>
+              )}
+              {selectedClient.contact2_nom && (
+                <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                  <p className="text-xs font-semibold text-gray-500 mb-1">Secondaire 1</p>
+                  <p className="text-sm font-medium text-gray-900">{selectedClient.contact2_nom}</p>
+                  {selectedClient.contact2_fonction && <p className="text-xs text-gray-500">{selectedClient.contact2_fonction}</p>}
+                  {selectedClient.contact2_telephone && <p className="text-xs text-gray-600 mt-1 flex items-center gap-1"><Phone className="w-3 h-3" />{selectedClient.contact2_telephone}</p>}
+                  {selectedClient.contact2_email && <p className="text-xs text-gray-600 flex items-center gap-1"><Mail className="w-3 h-3" />{selectedClient.contact2_email}</p>}
+                </div>
+              )}
+              {selectedClient.contact3_nom && (
+                <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                  <p className="text-xs font-semibold text-gray-500 mb-1">Secondaire 2</p>
+                  <p className="text-sm font-medium text-gray-900">{selectedClient.contact3_nom}</p>
+                  {selectedClient.contact3_fonction && <p className="text-xs text-gray-500">{selectedClient.contact3_fonction}</p>}
+                  {selectedClient.contact3_telephone && <p className="text-xs text-gray-600 mt-1 flex items-center gap-1"><Phone className="w-3 h-3" />{selectedClient.contact3_telephone}</p>}
+                  {selectedClient.contact3_email && <p className="text-xs text-gray-600 flex items-center gap-1"><Mail className="w-3 h-3" />{selectedClient.contact3_email}</p>}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Period selector */}
         <div className="flex items-center gap-2">
@@ -278,7 +337,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
           <ReportWizard
             user={user}
             clientId={selectedClient.id}
-            clientNom={`${selectedClient.prenom} ${selectedClient.nom}`}
+            clientNom={selectedClient.nom}
             lignes={lignes}
             courses={courses}
             onClose={() => setShowReportWizard(false)}
@@ -382,10 +441,10 @@ export function ClientsPage({ user }: ClientsPageProps) {
               >
                 <div className="flex items-center gap-4">
                   <div className="w-11 h-11 bg-emerald-50 rounded-full flex items-center justify-center">
-                    <span className="text-sm font-bold text-emerald-600">{c.prenom?.[0] || ''}{c.nom[0]}</span>
+                    <span className="text-sm font-bold text-emerald-600">{c.nom[0]}</span>
                   </div>
                   <div className="flex-1">
-                    <p className="font-medium text-gray-900">{c.prenom} {c.nom}</p>
+                    <p className="font-medium text-gray-900">{c.nom}</p>
                     <div className="flex items-center gap-3 mt-0.5">
                       {c.telephone && <span className="flex items-center gap-1 text-xs text-gray-500"><Phone className="w-3 h-3" />{c.telephone}</span>}
                       {c.email && <span className="flex items-center gap-1 text-xs text-gray-500"><Mail className="w-3 h-3" />{c.email}</span>}
@@ -417,43 +476,82 @@ export function ClientsPage({ user }: ClientsPageProps) {
   function renderForm() {
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
           <div className="p-6 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-lg font-semibold">{editing ? 'Modifier le client' : 'Nouveau client'}</h2>
             <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
           </div>
-          <form onSubmit={handleSubmit} className="p-6 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Prenom</label>
-                <input type="text" value={form.prenom} onChange={(e) => setForm({ ...form, prenom: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nom</label>
-                <input type="text" value={form.nom} onChange={(e) => setForm({ ...form, nom: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" required />
-              </div>
+          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nom du client *</label>
+              <input type="text" value={form.nom} onChange={(e) => setForm({ ...form, nom: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" placeholder="ex: CADEMA, Mairie de Mamoudzou..." required />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Telephone</label>
-                <input type="text" value={form.telephone} onChange={(e) => setForm({ ...form, telephone: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.telephone} onChange={(e) => setForm({ ...form, telephone: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
               </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Societe</label>
-              <input type="text" value={form.societe} onChange={(e) => setForm({ ...form, societe: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Societe</label>
+                <input type="text" value={form.societe} onChange={(e) => setForm({ ...form, societe: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Adresse</label>
+                <input type="text" value={form.adresse} onChange={(e) => setForm({ ...form, adresse: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Adresse</label>
-              <input type="text" value={form.adresse} onChange={(e) => setForm({ ...form, adresse: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+
+            {/* Contact principal */}
+            <div className="border-t border-gray-100 pt-5">
+              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <UserCircle className="w-4 h-4 text-amber-600" />
+                Interlocuteur principal
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="text" value={form.contact1_nom} onChange={(e) => setForm({ ...form, contact1_nom: e.target.value })} placeholder="Nom" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.contact1_fonction} onChange={(e) => setForm({ ...form, contact1_fonction: e.target.value })} placeholder="Fonction" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.contact1_telephone} onChange={(e) => setForm({ ...form, contact1_telephone: e.target.value })} placeholder="Telephone" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="email" value={form.contact1_email} onChange={(e) => setForm({ ...form, contact1_email: e.target.value })} placeholder="Email" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+              </div>
             </div>
+
+            {/* Contact secondaire 1 */}
+            <div className="border-t border-gray-100 pt-5">
+              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <UserCircle className="w-4 h-4 text-gray-400" />
+                Interlocuteur secondaire 1
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="text" value={form.contact2_nom} onChange={(e) => setForm({ ...form, contact2_nom: e.target.value })} placeholder="Nom" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.contact2_fonction} onChange={(e) => setForm({ ...form, contact2_fonction: e.target.value })} placeholder="Fonction" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.contact2_telephone} onChange={(e) => setForm({ ...form, contact2_telephone: e.target.value })} placeholder="Telephone" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="email" value={form.contact2_email} onChange={(e) => setForm({ ...form, contact2_email: e.target.value })} placeholder="Email" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+              </div>
+            </div>
+
+            {/* Contact secondaire 2 */}
+            <div className="border-t border-gray-100 pt-5">
+              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <UserCircle className="w-4 h-4 text-gray-400" />
+                Interlocuteur secondaire 2
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="text" value={form.contact3_nom} onChange={(e) => setForm({ ...form, contact3_nom: e.target.value })} placeholder="Nom" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.contact3_fonction} onChange={(e) => setForm({ ...form, contact3_fonction: e.target.value })} placeholder="Fonction" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="text" value={form.contact3_telephone} onChange={(e) => setForm({ ...form, contact3_telephone: e.target.value })} placeholder="Telephone" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+                <input type="email" value={form.contact3_email} onChange={(e) => setForm({ ...form, contact3_email: e.target.value })} placeholder="Email" className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" />
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-              <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none resize-none" />
+              <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none resize-none" />
             </div>
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors">Annuler</button>
