@@ -19,6 +19,8 @@ import {
   Bot,
   AlertTriangle,
   KeyRound,
+  Smartphone,
+  ExternalLink,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -155,6 +157,16 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
 
       {/* Footer */}
       <div className="p-3 border-t border-white/[0.06] space-y-0.5">
+        <a
+          href="/mobile/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-gray-500 hover:text-amber-400 hover:bg-amber-500/[0.06] transition-all duration-150"
+        >
+          <Smartphone className="w-[18px] h-[18px]" />
+          <span className="flex-1">App Chauffeur</span>
+          <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </a>
         <button
           onClick={() => onNavigate('debug-ai')}
           className={`group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 ${
