@@ -61,6 +61,7 @@ type Tab = 'bugs' | 'proposals';
 
 const STATUT_COLORS: Record<string, { bg: string; text: string }> = {
   open: { bg: 'bg-red-100', text: 'text-red-700' },
+  need_info: { bg: 'bg-blue-100', text: 'text-blue-700' },
   in_progress: { bg: 'bg-amber-100', text: 'text-amber-700' },
   resolved: { bg: 'bg-emerald-100', text: 'text-emerald-700' },
   closed: { bg: 'bg-gray-100', text: 'text-gray-600' },
@@ -72,6 +73,7 @@ const STATUT_COLORS: Record<string, { bg: string; text: string }> = {
 
 const STATUT_LABELS: Record<string, string> = {
   open: 'Ouvert',
+  need_info: 'Demande de precisions',
   in_progress: 'En cours',
   resolved: 'Resolu',
   closed: 'Ferme',
@@ -307,8 +309,8 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                     <div className="px-5 py-3 bg-gray-50/50 border-b border-gray-100 flex items-center gap-3">
                       <CheckCircle2 className="w-4 h-4 text-gray-400" />
                       <span className="text-xs font-medium text-gray-500">Statut :</span>
-                      <div className="flex items-center gap-1.5">
-                        {(['open', 'in_progress', 'resolved', 'closed'] as const).map(s => {
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {(['open', 'need_info', 'in_progress', 'resolved', 'closed'] as const).map(s => {
                           const style = STATUT_COLORS[s];
                           const isActive = bug.statut === s;
                           return (
