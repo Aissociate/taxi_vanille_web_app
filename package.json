@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --config web/vite.config.ts",
-    "build": "vite build --config web/vite.config.ts",
-    "preview": "vite preview --config web/vite.config.ts",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "lint": "eslint web/src"
   },
   "dependencies": {
