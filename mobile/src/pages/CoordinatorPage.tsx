@@ -210,10 +210,10 @@ export default function CoordinatorPage() {
     if (!replacementCourse || !chauffeur) return;
     setReplacingDriver(true);
 
-    // 1. Update original course status to 'remplacee'
+    // 1. Mark original course as replaced (same convention as back-office)
     await supabase
       .from('courses')
-      .update({ statut: 'remplacee', statut_planification: 'remplacee' })
+      .update({ statut_realisation: 'remplace' })
       .eq('id', replacementCourse.id);
 
     // 2. Create new course for the replacement driver
@@ -227,7 +227,7 @@ export default function CoordinatorPage() {
         arrivee: replacementCourse.arrivee,
         statut: 'planifiee',
         statut_planification: 'non_planifie',
-        statut_realisation: 'programme',
+        statut_realisation: 'en_cours',
         periode: 'matin',
         user_id: replacementCourse.user_id,
         coordinateur_id: chauffeur.id,
@@ -464,7 +464,7 @@ export default function CoordinatorPage() {
           </div>
         ) : (
           courses.map((course) => {
-            const isReplaced = course.statut_planification === 'remplacee';
+            const isReplaced = course.statut_realisation === 'remplace';
             const hasActiveIncident = course.incident && !isReplaced;
             return (
               <div

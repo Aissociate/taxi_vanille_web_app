@@ -178,7 +178,9 @@ export default function CourseDetailPage() {
     const executionId = crypto.randomUUID();
     const userId = chauffeur.user_id || chauffeur.id;
 
-    const courseUpdate = { statut: courseStatut };
+    // Keep legacy `statut` (incl. 'en_retard' for the driver view) AND set the
+    // canonical `statut_realisation` the back-office actually reads.
+    const courseUpdate = { statut: courseStatut, statut_realisation: 'en_cours' };
     const executionData = {
       id: executionId,
       course_id: courseId,
@@ -251,7 +253,7 @@ export default function CourseDetailPage() {
     } : null;
 
     const execUpdate = { statut: 'termine', heure_fin: now.toISOString() };
-    const courseUpdate = { statut: 'terminee' };
+    const courseUpdate = { statut: 'terminee', statut_realisation: 'termine' };
 
     if (isOnline()) {
       if (arretArriveeData) {

@@ -47,12 +47,20 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
-    const { data, error: fetchError } = await supabase
+    let query = supabase
       .from('chauffeurs')
       .select('*')
-      .eq('code', code.trim().toUpperCase())
-      .eq('pin', pinCode)
-      .maybeSingle();
+      .eq('code', code.trim().toUpperCase());
+
+    if (role === 'coordinateur') {
+      // Coordinators authenticate with their dedicated Android PIN set in the
+      // back-office (chauffeurs.pin_android), and must actually be a coordinator.
+      query = query.eq('pin_android', pinCode).eq('is_coordinateur', true);
+    } else {
+      query = query.eq('pin', pinCode);
+    }
+
+    const { data, error: fetchError } = await query.maybeSingle();
 
     if (fetchError || !data) {
       setError('Code ou PIN incorrect');

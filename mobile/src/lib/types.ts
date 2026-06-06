@@ -5,6 +5,8 @@ export interface Chauffeur {
   telephone: string;
   code: string;
   pin: string;
+  pin_android: string | null;
+  is_coordinateur: boolean;
   ligne_id: string | null;
   statut: string;
   vehicule_immatriculation: string;
@@ -39,7 +41,9 @@ export interface Course {
   client_id: string | null;
   depart: string;
   arrivee: string;
-  statut: string;
+  statut: string; // legacy, kept in sync with statut_realisation by a DB trigger
+  statut_planification: string | null; // 'planifie' | 'non_planifie'
+  statut_realisation: string | null; // 'en_cours' | 'termine' | 'annule' | 'remplace' | 'programme' | 'incident'
   periode: string;
   duree_minutes: number;
   notes: string;
