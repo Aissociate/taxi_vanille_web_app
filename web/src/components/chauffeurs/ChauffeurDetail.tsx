@@ -261,7 +261,9 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
 
   function getTarifForCourse(course: Course): number {
     if (course.montant > 0) return course.montant;
+    if (!course.date_heure) return 0;
     const d = new Date(course.date_heure);
+    if (isNaN(d.getTime())) return 0;
     const dow = d.getDay();
     let typeJour = 'lun_ven';
     if (dow === 6) typeJour = 'samedi';
@@ -326,7 +328,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center">
-            <span className="text-base font-bold text-amber-700">{chauffeur.code || (chauffeur.prenom[0] + chauffeur.nom[0])}</span>
+            <span className="text-base font-bold text-amber-700">{chauffeur.code || ((chauffeur.prenom?.[0] || '') + (chauffeur.nom?.[0] || ''))}</span>
           </div>
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wide">

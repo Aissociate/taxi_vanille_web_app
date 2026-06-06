@@ -5,7 +5,6 @@ import { useAuth, clearAuth } from '../lib/store';
 import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue';
 import type { CourseExecution, Ligne } from '../lib/types';
 import MobileIncidentSheet from '../components/MobileIncidentSheet';
-import MobileKilometrageScreen from '../components/MobileKilometrageScreen';
 
 interface CourseWithDetails {
   id: string;
@@ -34,23 +33,6 @@ interface AstreinteSession {
   heure_fin: string | null;
 }
 
-function getCurrentMois() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function getPreviousMois() {
-  const now = new Date();
-  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function isEndOfMonth() {
-  const now = new Date();
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return now.getDate() >= lastDay - 2;
-}
-
 interface Props {
   onNavigate: (path: string) => void;
 }
@@ -64,8 +46,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [showIncident, setShowIncident] = useState(false);
   const [lastSync, setLastSync] = useState<string>('');
-  const [kmRequired, setKmRequired] = useState<{ type: 'debut_mois' | 'fin_mois'; mois: string } | null>(null);
-  const [kmChecked, setKmChecked] = useState(false);
   const [hasAstreinte, setHasAstreinte] = useState(false);
   const [astreinteSession, setAstreinteSession] = useState<AstreinteSession | null>(null);
   const [astreinteElapsed, setAstreinteElapsed] = useState('00:00:00');
@@ -108,7 +88,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
 
   useEffect(() => {
     if (!chauffeur) { onNavigate('/mobile'); return; }
-    checkKilometrage();
     fetchCourses();
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
@@ -133,34 +112,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     }, 1000);
     return () => clearInterval(interval);
   }, [astreinteSession]);
-
-  const checkKilometrage = async () => {
-    if (!chauffeur) return;
-
-    const dayKey = `km_ok_${chauffeur.id}_${new Date().toISOString().split('T')[0]}`;
-    if (localStorage.getItem(dayKey)) { setKmRequired(null); setKmChecked(true); return; }
-
-    const currentMois = getCurrentMois();
-    const previousMois = getPreviousMois();
-
-    const { data: prevEnd } = await supabase.from('kilometrage').select('id').eq('chauffeur_id', chauffeur.id).eq('type', 'fin_mois').eq('mois', previousMois).maybeSingle();
-    if (!prevEnd) {
-      const { data: prevStart } = await supabase.from('kilometrage').select('id').eq('chauffeur_id', chauffeur.id).eq('type', 'debut_mois').eq('mois', previousMois).maybeSingle();
-      if (prevStart) { setKmRequired({ type: 'fin_mois', mois: previousMois }); setKmChecked(true); return; }
-    }
-
-    const { data: currentStart } = await supabase.from('kilometrage').select('id').eq('chauffeur_id', chauffeur.id).eq('type', 'debut_mois').eq('mois', currentMois).maybeSingle();
-    if (!currentStart) { setKmRequired({ type: 'debut_mois', mois: currentMois }); setKmChecked(true); return; }
-
-    if (isEndOfMonth()) {
-      const { data: currentEnd } = await supabase.from('kilometrage').select('id').eq('chauffeur_id', chauffeur.id).eq('type', 'fin_mois').eq('mois', currentMois).maybeSingle();
-      if (!currentEnd) { setKmRequired({ type: 'fin_mois', mois: currentMois }); setKmChecked(true); return; }
-    }
-
-    localStorage.setItem(dayKey, '1');
-    setKmRequired(null);
-    setKmChecked(true);
-  };
 
   const fetchCourses = async () => {
     if (!chauffeur) return;
@@ -260,19 +211,12 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     return today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase();
   };
 
-  if (!kmChecked || loading) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
-  }
-
-  if (kmRequired) {
-    return <MobileKilometrageScreen chauffeurId={chauffeur!.id} type={kmRequired.type} mois={kmRequired.mois} onComplete={() => {
-      setKmRequired(null);
-      checkKilometrage();
-    }} />;
   }
 
   // Astreinte not started

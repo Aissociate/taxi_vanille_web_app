@@ -1,9 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Component, type ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Search } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { ChauffeurDetail } from '../components/chauffeurs/ChauffeurDetail';
 import { ChauffeurForm } from '../components/chauffeurs/ChauffeurForm';
+
+class DetailErrorBoundary extends Component<{ children: ReactNode; onReset: () => void }, { hasError: boolean }> {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(err: unknown) { console.error('ChauffeurDetail crash:', err); }
+  render() {
+    if (this.state.hasError) return (
+      <div className="p-8 text-center">
+        <p className="text-red-600 font-medium">Erreur d'affichage de la fiche chauffeur</p>
+        <button onClick={() => { this.setState({ hasError: false }); this.props.onReset(); }} className="mt-3 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm">Recharger</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 
 export interface Chauffeur {
   id: string;
@@ -176,6 +191,7 @@ export function ChauffeursPage({ user, onNavigateToPage }: ChauffeursPageProps) 
       {/* Right Panel - Detail */}
       <div className="flex-1 overflow-y-auto bg-gray-50">
         {selectedChauffeur ? (
+          <DetailErrorBoundary key={selectedChauffeur.id} onReset={() => setSelectedId(null)}>
           <ChauffeurDetail
             chauffeur={selectedChauffeur}
             ligneName={selectedLigne?.nom}
@@ -188,6 +204,7 @@ export function ChauffeursPage({ user, onNavigateToPage }: ChauffeursPageProps) 
               onNavigateToPage?.('planning');
             }}
           />
+          </DetailErrorBoundary>
         ) : (
           <div className="flex items-center justify-center h-full text-gray-400">
             <p>Selectionnez un chauffeur</p>

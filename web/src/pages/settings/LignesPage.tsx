@@ -35,6 +35,8 @@ const COLORS = [
 export function LignesPage({ user }: LignesPageProps) {
   const [lignes, setLignes] = useState<Ligne[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [selectedLigne, setSelectedLigne] = useState<Ligne | null>(null);
+  const [selectedArrets, setSelectedArrets] = useState<Arret[]>([]);
   const [form, setForm] = useState({
     code: '',
     couleur: '#1a1a1a',
@@ -51,6 +53,12 @@ export function LignesPage({ user }: LignesPageProps) {
   async function loadLignes() {
     const { data } = await supabase.from('lignes').select('*').order('code, nom');
     if (data) setLignes(data);
+  }
+
+  async function selectLigne(ligne: Ligne) {
+    setSelectedLigne(ligne);
+    const { data } = await supabase.from('ligne_arrets').select('*').eq('ligne_id', ligne.id).order('ordre', { ascending: true });
+    setSelectedArrets(data || []);
   }
 
   function openCreate() {
@@ -159,7 +167,7 @@ export function LignesPage({ user }: LignesPageProps) {
         ) : (
           <div className="divide-y divide-gray-50">
             {activeLignes.map((ligne) => (
-              <div key={ligne.id} className="px-5 py-4 flex items-center gap-4 hover:bg-gray-50 transition-colors">
+              <div key={ligne.id} onClick={() => selectLigne(ligne)} className={`px-5 py-4 flex items-center gap-4 hover:bg-gray-50 transition-colors cursor-pointer ${selectedLigne?.id === ligne.id ? 'bg-amber-50 border-l-[3px] border-l-amber-600' : ''}`}>
                 <div
                   className="w-11 h-8 rounded border-2 flex items-center justify-center text-xs font-bold text-white"
                   style={{ borderColor: ligne.couleur, backgroundColor: ligne.couleur === '#1a1a1a' ? 'transparent' : 'transparent', color: ligne.couleur }}
@@ -179,10 +187,10 @@ export function LignesPage({ user }: LignesPageProps) {
                   <span className="w-2 h-2 bg-emerald-500 rounded-full" />
                   Active
                 </span>
-                <button onClick={() => handleToggleActive(ligne.id, ligne.active)} className="px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+                <button onClick={(e) => { e.stopPropagation(); handleToggleActive(ligne.id, ligne.active); }} className="px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
                   Desactiver
                 </button>
-                <button onClick={() => handleDelete(ligne.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Supprimer">
+                <button onClick={(e) => { e.stopPropagation(); handleDelete(ligne.id); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Supprimer">
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
@@ -224,6 +232,48 @@ export function LignesPage({ user }: LignesPageProps) {
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Detail Panel */}
+      {selectedLigne && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-11 h-8 rounded border-2 flex items-center justify-center text-xs font-bold"
+                style={{ borderColor: selectedLigne.couleur, color: selectedLigne.couleur }}
+              >
+                {selectedLigne.code || '?'}
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">{selectedLigne.nom || `${selectedLigne.depart} ↔ ${selectedLigne.arrivee}`}</h3>
+                <p className="text-xs text-gray-500">AM: {selectedLigne.sens_am} · PM: {selectedLigne.sens_pm}</p>
+              </div>
+            </div>
+            <button onClick={() => setSelectedLigne(null)} className="text-gray-400 hover:text-gray-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="p-5">
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              Arrets ({selectedArrets.length})
+            </h4>
+            {selectedArrets.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">Aucun arret configure pour cette ligne</p>
+            ) : (
+              <div className="space-y-2">
+                {selectedArrets.map((a, i) => (
+                  <div key={a.id || i} className="flex items-center gap-3 px-3 py-2.5 bg-gray-50 rounded-lg">
+                    <span className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center flex-shrink-0">{a.ordre}</span>
+                    <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                    <span className="text-sm font-medium text-gray-900 flex-1">{a.nom}</span>
+                    <span className="text-xs text-gray-500 font-mono">{a.latitude.toFixed(4)}, {a.longitude.toFixed(4)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

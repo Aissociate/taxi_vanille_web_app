@@ -114,7 +114,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     const courseStatut = diffMinutes > 10 ? 'en_retard' : 'en_cours';
     const executionId = crypto.randomUUID();
     const userId = chauffeur.user_id || chauffeur.id;
-    const courseUpdate = { statut: courseStatut, statut_realisation: 'en_cours' };
+    const courseUpdate = { statut: courseStatut, statut_realisation: 'en_cours', passagers_depart: passagersDepart };
     const executionData = { id: executionId, course_id: courseId, chauffeur_id: chauffeur.id, statut: 'en_cours', heure_debut: now.toISOString(), user_id: userId };
     const arretDepartData = arrets.length > 0 ? { course_execution_id: executionId, arret_id: arrets[0].id, ordre: 0, montants: passagersDepart, descendants: 0, statut: 'termine', heure_arrivee: now.toISOString(), heure_depart: now.toISOString(), user_id: userId } : null;
 
@@ -144,7 +144,20 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     const userId = chauffeur.user_id || chauffeur.id;
     const arretArriveeData = arrets.length > 1 ? { course_execution_id: execution.id, arret_id: arrets[arrets.length - 1].id, ordre: arrets.length - 1, montants: 0, descendants: passagersArrivee, statut: 'termine', heure_arrivee: now.toISOString(), heure_depart: now.toISOString(), user_id: userId } : null;
     const execUpdate = { statut: 'termine', heure_fin: now.toISOString() };
-    const courseUpdate = { statut: 'terminee', statut_realisation: 'termine' };
+
+    let montant = 0;
+    if (isOnline() && course?.date_heure) {
+      const d = new Date(course.date_heure);
+      const dow = d.getDay();
+      let typeJour = 'lun_ven';
+      if (dow === 6) typeJour = 'samedi';
+      else if (dow === 0) typeJour = 'dimanche';
+      const heure = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+      const { data: plages } = await supabase.from('tarif_plages').select('tarif').eq('type_jour', typeJour).lte('heure_debut', heure).gt('heure_fin', heure);
+      if (plages && plages.length > 0) montant = plages[0].tarif || 0;
+    }
+
+    const courseUpdate = { statut: 'terminee', statut_realisation: 'termine', passagers_arrivee: passagersArrivee, nb_passagers: Math.max(passagersDepart, passagersArrivee), montant };
 
     if (isOnline()) {
       if (arretArriveeData) await supabase.from('arret_executions').insert(arretArriveeData);
@@ -209,8 +222,9 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
           <div className="flex items-center justify-center gap-6 mt-4">
             <button type="button" onClick={() => setPassagersDepart(Math.max(0, passagersDepart - 1))} className="w-14 h-14 rounded-full border-2 border-gray-900 flex items-center justify-center text-2xl font-bold">-</button>
             <span className="text-5xl font-bold w-16 text-center">{passagersDepart}</span>
-            <button type="button" onClick={() => setPassagersDepart(passagersDepart + 1)} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
+            <button type="button" onClick={() => setPassagersDepart(Math.min(8, passagersDepart + 1))} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
           </div>
+          <p className="text-[10px] text-center text-gray-400 mt-2">8 passagers maximum</p>
         </div>
         <div className="mx-4 mt-6 p-4 border border-gray-200 rounded-lg bg-white flex items-center justify-between">
           <span className="text-4xl font-bold">{passagersDepart}</span>
@@ -248,8 +262,9 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
         <div className="flex items-center justify-center gap-6 mt-4">
           <button type="button" onClick={() => setPassagersArrivee(Math.max(0, passagersArrivee - 1))} className="w-14 h-14 rounded-full border-2 border-gray-900 flex items-center justify-center text-2xl font-bold">-</button>
           <span className="text-5xl font-bold w-16 text-center">{passagersArrivee}</span>
-          <button type="button" onClick={() => setPassagersArrivee(passagersArrivee + 1)} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
+          <button type="button" onClick={() => setPassagersArrivee(Math.min(8, passagersArrivee + 1))} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
         </div>
+        <p className="text-[10px] text-center text-gray-400 mt-2">8 passagers maximum</p>
       </div>
       <div className="flex-1" />
       <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50 mt-6">
