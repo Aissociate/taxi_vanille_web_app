@@ -1,0 +1,13 @@
+{
+  "name": "taxi-vanille",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": ["web", "mobile"],
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "preview": "npm run preview -w web",
+    "lint": "npm run lint -w web"
+  }
+}
