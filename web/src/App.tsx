@@ -21,8 +21,12 @@ import { DeveloppementPage } from './pages/DeveloppementPage';
 import { DebugAIPage } from './pages/DebugAIPage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { BugReportButton } from './components/BugReportButton';
+import MobileApp from './mobile/MobileApp';
 
 function App() {
+  if (window.location.pathname.startsWith('/mobile')) {
+    return <MobileApp />;
+  }
   const { user, loading, signIn, signUp, signOut } = useAuth();
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
 
