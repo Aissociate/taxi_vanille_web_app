@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+@import '@porsche-design-system/components-react/tailwindcss';
+
+html, body, #root {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+#root {
+  display: flex;
+  justify-content: center;
+  background-color: #EEEFF2;
+}
+
+#app-shell {
+  width: 100%;
+  max-width: 430px;
+  min-height: 100%;
+  position: relative;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+@media (min-width: 431px) {
+  #root {
+    background-color: #1a1a1a;
+  }
+  #app-shell {
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.3);
+  }
+}
+
+input, textarea, select {
+  user-select: text;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}

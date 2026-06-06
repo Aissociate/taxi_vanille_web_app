@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Taxi Vanille</string>
+    <string name="title_activity_main">Taxi Vanille</string>
+    <string name="package_name">com.taxivanille.chauffeur</string>
+    <string name="custom_url_scheme">com.taxivanille.chauffeur</string>
+</resources>
