@@ -42,7 +42,7 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
     notes: chauffeur?.notes || '',
     commentaires: chauffeur?.commentaires || '',
     is_coordinateur: chauffeur?.is_coordinateur || false,
-    pin_android: chauffeur?.pin_android || '',
+    pin_android: '',
   });
 
   function handleSubmit(e: React.FormEvent) {
@@ -52,17 +52,25 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
       ...form,
       ligne_id: form.ligne_id || null,
       vehicule_places: form.vehicule_places || 0,
-      pin_android: form.is_coordinateur ? (form.pin_android || null) : null,
     };
     for (const field of dateFields) {
       if (!(payload as Record<string, unknown>)[field]) {
         (payload as Record<string, unknown>)[field] = null;
       }
     }
+    // PIN chauffeur : vide à l'édition = conserver l'existant ; vide à la création = défaut 1234
     if (!form.pin && chauffeur) {
       delete (payload as Record<string, unknown>).pin;
     } else if (!form.pin && !chauffeur) {
       (payload as Record<string, unknown>).pin = '1234';
+    }
+    // PIN Android (coordinateur) : null si non coordinateur ; sinon même logique que le PIN chauffeur
+    if (!form.is_coordinateur) {
+      payload.pin_android = null;
+    } else if (!form.pin_android && chauffeur) {
+      delete (payload as Record<string, unknown>).pin_android;
+    } else if (!form.pin_android && !chauffeur) {
+      (payload as Record<string, unknown>).pin_android = '1234';
     }
     onSave(payload);
   }
@@ -259,8 +267,8 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
             </div>
             {form.is_coordinateur && (
               <div className="mt-3">
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">PIN Android (acces app mobile)</label>
-                <input type="text" value={form.pin_android} onChange={(e) => setForm({ ...form, pin_android: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none font-mono tracking-widest" placeholder="0000" maxLength={6} />
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">PIN Android coordinateur (laisser vide pour ne pas changer)</label>
+                <input type="password" value={form.pin_android} onChange={(e) => setForm({ ...form, pin_android: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none font-mono tracking-widest" placeholder="****" maxLength={6} />
                 <p className="text-[10px] text-gray-400 mt-1">Code PIN specifique pour l'application Android du coordinateur</p>
               </div>
             )}
