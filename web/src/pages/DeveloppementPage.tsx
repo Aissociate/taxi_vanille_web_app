@@ -99,17 +99,17 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
   const [proposalDesc, setProposalDesc] = useState('');
   const [screenshotModal, setScreenshotModal] = useState<string | null>(null);
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll(true); }, []);
 
   useEffect(() => {
-    const handleFocus = () => loadAll();
+    const handleFocus = () => loadAll(false);
     window.addEventListener('focus', handleFocus);
-    const interval = setInterval(loadAll, 15000);
+    const interval = setInterval(() => loadAll(false), 15000);
     return () => { window.removeEventListener('focus', handleFocus); clearInterval(interval); };
   }, []);
 
-  async function loadAll() {
-    setLoading(true);
+  async function loadAll(showLoader = false) {
+    if (showLoader) setLoading(true);
     const [bRes, rRes, pRes, vRes, prRes, upRes] = await Promise.all([
       supabase.from('bugs').select('*').order('created_at', { ascending: false }),
       supabase.from('bug_responses').select('*').order('created_at', { ascending: true }),
