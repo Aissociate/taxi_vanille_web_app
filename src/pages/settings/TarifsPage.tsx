@@ -17,6 +17,7 @@ interface Plage {
   libelle: string;
   tarif: number;
   ordre: number;
+  ligne_id: string | null;
 }
 
 interface Frais {
@@ -34,6 +35,12 @@ interface TrancheKm {
   km_a: number | null;
   tarif: number;
   ordre: number;
+}
+
+interface Ligne {
+  id: string;
+  code: string;
+  nom: string;
 }
 
 const TABS: { key: TypeJour; label: string }[] = [
@@ -55,6 +62,8 @@ export function TarifsPage({ user }: TarifsPageProps) {
   const [plages, setPlages] = useState<Plage[]>([]);
   const [frais, setFrais] = useState<Frais[]>([]);
   const [tranchesKm, setTranchesKm] = useState<TrancheKm[]>([]);
+  const [lignes, setLignes] = useState<Ligne[]>([]);
+  const [selectedLigne, setSelectedLigne] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -62,14 +71,16 @@ export function TarifsPage({ user }: TarifsPageProps) {
 
   async function loadAll() {
     setLoading(true);
-    const [pRes, fRes, kRes] = await Promise.all([
+    const [pRes, fRes, kRes, lRes] = await Promise.all([
       supabase.from('tarif_plages').select('*').order('ordre'),
       supabase.from('tarif_frais').select('*'),
       supabase.from('tarif_km').select('*').order('ordre'),
+      supabase.from('lignes').select('id, code, nom').eq('active', true).order('code'),
     ]);
     if (pRes.data) setPlages(pRes.data);
     if (fRes.data) setFrais(fRes.data);
     if (kRes.data) setTranchesKm(kRes.data);
+    if (lRes.data) setLignes(lRes.data);
     setLoading(false);
   }
 
@@ -80,7 +91,11 @@ export function TarifsPage({ user }: TarifsPageProps) {
   }
 
   // Plages - local state update + debounced save
-  const currentPlages = plages.filter(p => p.type_jour === activeTab);
+  const currentPlages = plages.filter(p => {
+    if (p.type_jour !== activeTab) return false;
+    if (selectedLigne === 'all') return !p.ligne_id;
+    return p.ligne_id === selectedLigne;
+  });
 
   function computeCoveredHours(): number {
     let totalMinutes = 0;
@@ -103,6 +118,7 @@ export function TarifsPage({ user }: TarifsPageProps) {
       libelle: '',
       tarif: 0,
       ordre: currentPlages.length,
+      ligne_id: selectedLigne === 'all' ? null : selectedLigne,
       user_id: user.id,
     });
     loadAll();
@@ -189,6 +205,26 @@ export function TarifsPage({ user }: TarifsPageProps) {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Tarification</h1>
         <p className="text-gray-500 mt-1">Grilles tarifaires par tranche horaire et frais de gestion</p>
+      </div>
+
+      {/* Line selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold text-gray-500 uppercase">Ligne :</span>
+        <button
+          onClick={() => setSelectedLigne('all')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${selectedLigne === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+        >
+          Par defaut (toutes)
+        </button>
+        {lignes.map(l => (
+          <button
+            key={l.id}
+            onClick={() => setSelectedLigne(l.id)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${selectedLigne === l.id ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            {l.code}
+          </button>
+        ))}
       </div>
 
       {/* PLAGES HORAIRES */}

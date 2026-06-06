@@ -1,0 +1,2 @@
+ALTER TABLE tarif_plages
+  ADD COLUMN IF NOT EXISTS ligne_id uuid REFERENCES lignes(id) ON DELETE SET NULL;

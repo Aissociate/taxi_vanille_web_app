@@ -82,3 +82,35 @@
     background-color: #9ca3af;
   }
 }
+
+@media print {
+  body {
+    background: white !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  nav, aside, .fixed, button, [role="dialog"] {
+    display: none !important;
+  }
+
+  main, [data-main-content] {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .border, .border-b, .border-t, .border-r, .border-l {
+    border-color: #e5e7eb !important;
+  }
+
+  .shadow-sm, .shadow-md, .shadow-lg, .shadow-xl {
+    box-shadow: none !important;
+  }
+
+  @page {
+    size: landscape;
+    margin: 1cm;
+  }
+}

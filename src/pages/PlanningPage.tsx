@@ -46,7 +46,6 @@ interface Ligne {
 interface Client {
   id: string;
   nom: string;
-  prenom: string;
 }
 
 interface Astreinte {
@@ -67,6 +66,20 @@ const HOURS = Array.from({ length: 20 }, (_, i) => i + 4);
 const TOTAL_HOURS = 20;
 const START_HOUR = 4;
 
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function toLocalDateTimeStr(d: Date): string {
+  const date = toLocalDateStr(d);
+  const h = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${date}T${h}:${min}`;
+}
+
 function formatDateFr(d: Date): string {
   const days = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
   const months = ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aout', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -83,6 +96,13 @@ function getMonday(d: Date): Date {
 
 function isSameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function parseCourseDate(dateStr: string): Date {
+  if (dateStr.endsWith('Z') || dateStr.includes('+')) {
+    return new Date(dateStr);
+  }
+  return new Date(dateStr.replace('T', ' '));
 }
 
 export function PlanningPage({ user }: PlanningPageProps) {
@@ -144,7 +164,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const [ch, li, cl] = await Promise.all([
       supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id, is_coordinateur').order('code, nom'),
       supabase.from('lignes').select('id, code, nom, depart, arrivee, couleur').eq('active', true).order('code'),
-      supabase.from('clients').select('id, nom, prenom'),
+      supabase.from('clients').select('id, nom'),
     ]);
     if (ch.data) setChauffeurs(ch.data);
     if (li.data) setLignes(li.data);
@@ -167,7 +187,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       from = new Date(d.getFullYear(), d.getMonth(), 1);
       to = new Date(d.getFullYear(), d.getMonth() + 1, 1);
     }
-    return { from: from.toISOString(), to: to.toISOString() };
+    return { from: toLocalDateStr(from) + 'T00:00:00', to: toLocalDateStr(to) + 'T00:00:00' };
   }
 
   async function loadCourses() {
@@ -248,7 +268,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   function isDayAllowed(date: Date, feries: string[]): boolean {
     const dow = date.getDay();
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = toLocalDateStr(date);
     const isFerie = feries.includes(dateStr);
 
     if (isFerie && !dupDays.ferie) return false;
@@ -272,31 +292,30 @@ export function PlanningPage({ user }: PlanningPageProps) {
       startDate.setHours(0, 0, 0, 0);
 
       if (view === 'jour') {
-        const dayStr = currentDate.toISOString().split('T')[0];
+        const dayStr = toLocalDateStr(currentDate);
         sourceCourses = courses.filter(c => c.date_heure.startsWith(dayStr));
       } else {
         const monday = getMonday(currentDate);
         const sunday = new Date(monday);
         sunday.setDate(sunday.getDate() + 7);
         sourceCourses = courses.filter(c => {
-          const d = new Date(c.date_heure);
+          const d = parseCourseDate(c.date_heure);
           return d >= monday && d < sunday;
         });
       }
 
       if (sourceCourses.length === 0) { alert('Aucune course a dupliquer'); setDupLoading(false); return; }
 
-      const totalDays = dupWeeks * 7;
       const newCourses: Array<Record<string, unknown>> = [];
 
-      for (let dayOffset = 1; dayOffset <= totalDays; dayOffset++) {
-        if (view === 'jour') {
+      if (view === 'jour') {
+        for (let dayOffset = 1; dayOffset <= dupWeeks * 7; dayOffset++) {
           const targetDate = new Date(startDate);
           targetDate.setDate(targetDate.getDate() + dayOffset);
           if (!isDayAllowed(targetDate, joursFeries)) continue;
-          const targetStr = targetDate.toISOString().split('T')[0];
+          const targetStr = toLocalDateStr(targetDate);
           sourceCourses.forEach(c => {
-            const time = c.date_heure.split('T')[1];
+            const time = c.date_heure.includes('T') ? c.date_heure.split('T')[1].slice(0, 5) : '08:00';
             newCourses.push({
               date_heure: `${targetStr}T${time}`,
               depart: c.depart, arrivee: c.arrivee,
@@ -306,18 +325,18 @@ export function PlanningPage({ user }: PlanningPageProps) {
               periode: c.periode, duree_minutes: c.duree_minutes,
             });
           });
-        } else {
+        }
+      } else {
+        for (let weekOffset = 1; weekOffset <= dupWeeks; weekOffset++) {
           sourceCourses.forEach(c => {
-            const sourceDate = new Date(c.date_heure);
+            const sourceDate = parseCourseDate(c.date_heure);
             const targetDate = new Date(sourceDate);
-            targetDate.setDate(targetDate.getDate() + (dupWeeks * 7));
-            // Adjust: offset is per-week duplication
-            const weekOffset = Math.ceil(dayOffset / 7);
-            const actualTarget = new Date(sourceDate);
-            actualTarget.setDate(actualTarget.getDate() + (weekOffset * 7));
-            if (!isDayAllowed(actualTarget, joursFeries)) return;
+            targetDate.setDate(targetDate.getDate() + (weekOffset * 7));
+            if (!isDayAllowed(targetDate, joursFeries)) return;
+            const targetStr = toLocalDateStr(targetDate);
+            const time = c.date_heure.includes('T') ? c.date_heure.split('T')[1].slice(0, 5) : '08:00';
             newCourses.push({
-              date_heure: actualTarget.toISOString(),
+              date_heure: `${targetStr}T${time}`,
               depart: c.depart, arrivee: c.arrivee,
               statut_planification: 'planifie', statut_realisation: 'programme',
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
@@ -325,13 +344,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
               periode: c.periode, duree_minutes: c.duree_minutes,
             });
           });
-          break;
         }
       }
 
       if (newCourses.length === 0) { alert('Aucun jour cible ne correspond aux criteres'); setDupLoading(false); return; }
 
-      // Insert in batches of 100
       for (let i = 0; i < newCourses.length; i += 100) {
         await supabase.from('courses').insert(newCourses.slice(i, i + 100));
       }
@@ -351,7 +368,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const chauffeur = chauffeurId ? chauffeurs.find(c => c.id === chauffeurId) : null;
     const ligne = chauffeur?.ligne_id ? lignes.find(l => l.id === chauffeur.ligne_id) : null;
     setForm({
-      date_heure: d.toISOString().slice(0, 16),
+      date_heure: toLocalDateTimeStr(d),
       depart: ligne?.depart || '',
       arrivee: ligne?.arrivee || '',
       statut_planification: 'planifie',
@@ -404,7 +421,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function openAstreinteForm() {
-    const dateStr = currentDate.toISOString().slice(0, 10);
+    const dateStr = toLocalDateStr(currentDate);
     setAstreinteForm({
       chauffeur_id: '',
       ligne_id: '',
@@ -566,18 +583,18 @@ export function PlanningPage({ user }: PlanningPageProps) {
   function getCourseForChauffeur(chauffeurId: string, date?: Date): Course[] {
     return filteredCourses.filter(c => {
       if (c.chauffeur_id !== chauffeurId) return false;
-      if (date) return isSameDay(new Date(c.date_heure), date);
+      if (date) return isSameDay(parseCourseDate(c.date_heure), date);
       return true;
     });
   }
 
   function getCoursePosition(course: Course): { left: string; width: string } {
-    const d = new Date(course.date_heure);
+    const d = parseCourseDate(course.date_heure);
     const h = d.getHours() + d.getMinutes() / 60;
     const startOffset = h - START_HOUR;
     const duration = (course.duree_minutes || 60) / 60;
     return {
-      left: `${(startOffset / TOTAL_HOURS) * 100}%`,
+      left: `${(Math.max(0, startOffset) / TOTAL_HOURS) * 100}%`,
       width: `${(duration / TOTAL_HOURS) * 100}%`,
     };
   }
@@ -777,7 +794,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           </div>
                           {chCourses.map(course => {
                             const pos = getCoursePosition(course);
-                            const time = new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                            const time = parseCourseDate(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
                             const isNonPlanifie = course.statut_planification === 'non_planifie';
                             const isRemplacee = course.statut_realisation === 'remplace';
                             const isBrouillon = course.is_brouillon;
@@ -912,7 +929,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           const isBrouillon = c.is_brouillon;
                           return (
                             <div key={c.id} onClick={(e) => { e.stopPropagation(); openEdit(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{new Date(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.arrivee}
+                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.arrivee}
                             </div>
                           );
                         })}
@@ -940,7 +957,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 <div key={`empty-${i}`} className="border-r border-b border-gray-50 min-h-[80px]" />
               ))}
               {monthDays.map(d => {
-                const dayCourses = filteredCourses.filter(c => isSameDay(new Date(c.date_heure), d));
+                const dayCourses = filteredCourses.filter(c => isSameDay(parseCourseDate(c.date_heure), d));
                 return (
                   <div key={d.toISOString()} className={`border-r border-b border-gray-50 min-h-[80px] p-1 cursor-pointer hover:bg-gray-50 ${isSameDay(d, new Date()) ? 'bg-amber-50' : ''}`} onClick={() => { setCurrentDate(d); setView('jour'); }}>
                     <p className={`text-xs font-medium mb-0.5 ${isSameDay(d, new Date()) ? 'text-amber-600' : 'text-gray-700'}`}>{d.getDate()}</p>
@@ -948,7 +965,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                       const ligne = c.ligne_id ? lignes.find(l => l.id === c.ligne_id) : null;
                       return (
                         <div key={c.id} className="text-[8px] px-1 py-0.5 rounded mb-0.5 text-white truncate" style={{ backgroundColor: c.statut_planification === 'non_planifie' ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                          {new Date(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                          {parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       );
                     })}
@@ -1039,10 +1056,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 <p className="text-xs text-gray-500">Resume</p>
                 <p className="text-sm font-medium text-gray-800 mt-0.5">
                   {courses.filter(c => {
-                    if (view === 'jour') return c.date_heure.startsWith(currentDate.toISOString().split('T')[0]);
+                    if (view === 'jour') return c.date_heure.startsWith(toLocalDateStr(currentDate));
                     const mon = getMonday(currentDate);
                     const sun = new Date(mon); sun.setDate(sun.getDate() + 7);
-                    const d = new Date(c.date_heure);
+                    const d = parseCourseDate(c.date_heure);
                     return d >= mon && d < sun;
                   }).length} course(s) source → sur {Object.values(dupDays).filter(Boolean).length} type(s) de jour × {dupWeeks} semaine(s)
                 </p>
@@ -1168,7 +1185,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Client</label>
                   <select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none">
                     <option value="">--</option>
-                    {clients.map(c => <option key={c.id} value={c.id}>{c.prenom} {c.nom}</option>)}
+                    {clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
                   </select>
                 </div>
               </div>
