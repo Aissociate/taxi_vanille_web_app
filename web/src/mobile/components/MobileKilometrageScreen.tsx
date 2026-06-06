@@ -24,7 +24,7 @@ export default function MobileKilometrageScreen({ chauffeurId, type, mois, onCom
 
   const handleSubmit = async () => {
     const km = parseInt(value, 10);
-    if (!km || km < 0) { setError('Valeur invalide'); return; }
+    if (isNaN(km) || km <= 0) { setError('Saisissez un nombre valide'); return; }
     setSending(true);
     setError('');
 
@@ -35,8 +35,8 @@ export default function MobileKilometrageScreen({ chauffeurId, type, mois, onCom
       mois,
     });
 
-    if (dbError) {
-      setError(dbError.code === '23505' ? 'Deja enregistre' : 'Erreur');
+    if (dbError && dbError.code !== '23505') {
+      setError('Erreur lors de l\'enregistrement');
       setSending(false);
       return;
     }
