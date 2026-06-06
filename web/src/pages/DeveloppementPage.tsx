@@ -101,6 +101,13 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
 
   useEffect(() => { loadAll(); }, []);
 
+  useEffect(() => {
+    const handleFocus = () => loadAll();
+    window.addEventListener('focus', handleFocus);
+    const interval = setInterval(loadAll, 15000);
+    return () => { window.removeEventListener('focus', handleFocus); clearInterval(interval); };
+  }, []);
+
   async function loadAll() {
     setLoading(true);
     const [bRes, rRes, pRes, vRes, prRes, upRes] = await Promise.all([

@@ -136,6 +136,10 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
 
   const checkKilometrage = async () => {
     if (!chauffeur) return;
+
+    const todayKey = `km_checked_${chauffeur.id}_${new Date().toISOString().split('T')[0]}`;
+    if (localStorage.getItem(todayKey)) { setKmChecked(true); return; }
+
     const currentMois = getCurrentMois();
     const previousMois = getPreviousMois();
 
@@ -152,6 +156,8 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       const { data: currentEnd } = await supabase.from('kilometrage').select('id').eq('chauffeur_id', chauffeur.id).eq('type', 'fin_mois').eq('mois', currentMois).maybeSingle();
       if (!currentEnd) { setKmRequired({ type: 'fin_mois', mois: currentMois }); setKmChecked(true); return; }
     }
+
+    localStorage.setItem(todayKey, '1');
     setKmRequired(null);
     setKmChecked(true);
   };
@@ -263,7 +269,12 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
   }
 
   if (kmRequired) {
-    return <MobileKilometrageScreen chauffeurId={chauffeur!.id} type={kmRequired.type} mois={kmRequired.mois} onComplete={() => { setKmRequired(null); checkKilometrage(); }} />;
+    return <MobileKilometrageScreen chauffeurId={chauffeur!.id} type={kmRequired.type} mois={kmRequired.mois} onComplete={() => {
+      setKmRequired(null);
+      const todayKey = `km_checked_${chauffeur!.id}_${new Date().toISOString().split('T')[0]}`;
+      localStorage.setItem(todayKey, '1');
+      checkKilometrage();
+    }} />;
   }
 
   // Astreinte not started

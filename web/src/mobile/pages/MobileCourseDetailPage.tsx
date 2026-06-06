@@ -251,11 +251,8 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
           <button type="button" onClick={() => setPassagersArrivee(passagersArrivee + 1)} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
         </div>
       </div>
-      <div className="mx-4 mt-6 p-4 border border-gray-200 rounded-lg bg-white flex items-center justify-between">
-        <span className="text-4xl font-bold">{passagersDepart - passagersArrivee}</span>
-        <span className="text-sm text-gray-500">passagers<br/>restants</span>
-      </div>
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-gray-50">
+      <div className="flex-1" />
+      <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50 mt-6">
         <button type="button" onClick={handleTerminer} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700">TERMINER LA COURSE</button>
       </div>
     </div>
