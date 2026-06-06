@@ -127,6 +127,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [clients, setClients] = useState<Client[]>([]);
   const [astreintes, setAstreintes] = useState<Astreinte[]>([]);
   const [lineFilter, setLineFilter] = useState<string>('all');
+  const [chauffeurFilter, setChauffeurFilter] = useState<string>('all');
   const [periodeFilter, setPeriodeFilter] = useState<PeriodeFilter>('all');
   const [showForm, setShowForm] = useState(false);
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
@@ -170,7 +171,14 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [resizingId, setResizingId] = useState<string | null>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number; courseId: string; containerWidth: number } | null>(null);
 
-  useEffect(() => { loadRefs(); }, []);
+  useEffect(() => {
+    loadRefs();
+    const savedFilter = sessionStorage.getItem('planning_chauffeur_filter');
+    if (savedFilter) {
+      setChauffeurFilter(savedFilter);
+      sessionStorage.removeItem('planning_chauffeur_filter');
+    }
+  }, []);
   useEffect(() => { loadCourses(); loadAstreintes(); }, [currentDate, view]);
 
   async function loadRefs() {
@@ -380,6 +388,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
     else d.setHours(8, 0, 0, 0);
     const chauffeur = chauffeurId ? chauffeurs.find(c => c.id === chauffeurId) : null;
     const ligne = chauffeur?.ligne_id ? lignes.find(l => l.id === chauffeur.ligne_id) : null;
+
+    const saved = localStorage.getItem('planning_last_course');
+    const last = saved ? JSON.parse(saved) : null;
+
     setForm({
       date_heure: toLocalDateTimeStr(d),
       depart: ligne?.depart || '',
@@ -388,12 +400,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
       statut_realisation: 'programme',
       montant: 0,
       notes: '',
-      chauffeur_id: chauffeurId || '',
-      client_id: '',
-      ligne_id: chauffeur?.ligne_id || '',
+      chauffeur_id: chauffeurId || (last?.chauffeur_id || ''),
+      client_id: last?.client_id || '',
+      ligne_id: chauffeur?.ligne_id || (last?.ligne_id || ''),
       coordinateur_id: '',
-      periode: (hour !== undefined && hour >= 12) ? 'apres_midi' : 'matin',
-      duree_minutes: 60,
+      periode: (hour !== undefined && hour >= 12) ? 'apres_midi' : (last?.periode || 'matin'),
+      duree_minutes: last?.duree_minutes || 60,
       is_astreinte: false,
       is_brouillon: draftMode,
     });
@@ -483,6 +495,13 @@ export function PlanningPage({ user }: PlanningPageProps) {
       const { data } = await supabase.from('courses').insert(payload).select('id').maybeSingle();
       const chauffeur = chauffeurs.find(c => c.id === form.chauffeur_id);
       await logAction('create', 'courses', data?.id || null, `Course creee: ${form.depart} → ${form.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, null, payload);
+      localStorage.setItem('planning_last_course', JSON.stringify({
+        chauffeur_id: form.chauffeur_id,
+        client_id: form.client_id,
+        ligne_id: form.ligne_id,
+        periode: form.periode,
+        duree_minutes: form.duree_minutes,
+      }));
     }
     setShowForm(false);
     loadCourses();
@@ -571,20 +590,29 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   // Filtering
   const filteredChauffeurs = useMemo(() => {
-    if (lineFilter === 'all') return chauffeurs;
-    return chauffeurs.filter(c => c.ligne_id === lineFilter);
-  }, [chauffeurs, lineFilter]);
+    let result = chauffeurs;
+    if (lineFilter !== 'all') {
+      result = result.filter(c => c.ligne_id === lineFilter);
+    }
+    if (chauffeurFilter !== 'all') {
+      result = result.filter(c => c.id === chauffeurFilter);
+    }
+    return result;
+  }, [chauffeurs, lineFilter, chauffeurFilter]);
 
   const filteredCourses = useMemo(() => {
     let result = courses;
     if (lineFilter !== 'all') {
       result = result.filter(c => c.ligne_id === lineFilter);
     }
+    if (chauffeurFilter !== 'all') {
+      result = result.filter(c => c.chauffeur_id === chauffeurFilter);
+    }
     if (periodeFilter !== 'all') {
       result = result.filter(c => c.periode === periodeFilter);
     }
     return result;
-  }, [courses, lineFilter, periodeFilter]);
+  }, [courses, lineFilter, chauffeurFilter, periodeFilter]);
 
   const chauffeursByLigne = useMemo(() => {
     const groups: Map<string | null, Chauffeur[]> = new Map();
@@ -733,6 +761,23 @@ export function PlanningPage({ user }: PlanningPageProps) {
             <button onClick={() => setPeriodeFilter('matin')} className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${periodeFilter === 'matin' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>AM</button>
             <button onClick={() => setPeriodeFilter('apres_midi')} className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${periodeFilter === 'apres_midi' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>PM</button>
             <button onClick={() => setPeriodeFilter('astreinte')} className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${periodeFilter === 'astreinte' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>Astr.</button>
+          </div>
+
+          <div className="w-px h-5 bg-gray-200" />
+
+          {/* Chauffeur filter */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-gray-500 uppercase font-semibold">Chauffeur</span>
+            <select
+              value={chauffeurFilter}
+              onChange={(e) => setChauffeurFilter(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:border-amber-500"
+            >
+              <option value="all">Tous</option>
+              {chauffeurs.map(c => (
+                <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>
+              ))}
+            </select>
           </div>
 
           {/* Brouillon badge */}

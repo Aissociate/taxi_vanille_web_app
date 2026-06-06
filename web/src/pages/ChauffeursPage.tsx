@@ -43,9 +43,10 @@ export interface Chauffeur {
 
 interface ChauffeursPageProps {
   user: User;
+  onNavigateToPage?: (page: string) => void;
 }
 
-export function ChauffeursPage({ user }: ChauffeursPageProps) {
+export function ChauffeursPage({ user, onNavigateToPage }: ChauffeursPageProps) {
   const [chauffeurs, setChauffeurs] = useState<Chauffeur[]>([]);
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -182,6 +183,10 @@ export function ChauffeursPage({ user }: ChauffeursPageProps) {
             onEdit={() => openEdit(selectedChauffeur)}
             onDelete={() => handleDelete(selectedChauffeur.id)}
             onToggleStatus={() => handleToggleStatus(selectedChauffeur.id, selectedChauffeur.statut)}
+            onNavigateToPlanning={(chauffeurId) => {
+              sessionStorage.setItem('planning_chauffeur_filter', chauffeurId);
+              onNavigateToPage?.('planning');
+            }}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-400">

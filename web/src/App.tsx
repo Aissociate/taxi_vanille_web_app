@@ -50,7 +50,7 @@ function App() {
       case 'dashboard': return <DashboardPage />;
       case 'planning': return <PlanningPage user={user!} />;
       case 'carte-gps': return <CarteGPSPage />;
-      case 'chauffeurs': return <ChauffeursPage user={user!} />;
+      case 'chauffeurs': return <ChauffeursPage user={user!} onNavigateToPage={(page) => setCurrentPage(page as Page)} />;
       case 'clients': return <ClientsPage user={user!} />;
       case 'incidents': return <IncidentsPage user={user!} />;
       case 'facturation': return <FacturationPage user={user!} />;

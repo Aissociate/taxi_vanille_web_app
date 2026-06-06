@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Edit2, Power, Trash2, Receipt, X, FileText, TrendingUp, Gauge, Clock } from 'lucide-react';
+import { Edit2, Power, Trash2, Receipt, X, FileText, TrendingUp, Gauge, Clock, Calendar } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import type { Chauffeur } from '../../pages/ChauffeursPage';
 
@@ -79,9 +79,10 @@ interface ChauffeurDetailProps {
   onEdit: () => void;
   onDelete: () => void;
   onToggleStatus: () => void;
+  onNavigateToPlanning?: (chauffeurId: string) => void;
 }
 
-export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, onToggleStatus }: ChauffeurDetailProps) {
+export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, onToggleStatus, onNavigateToPlanning }: ChauffeurDetailProps) {
   const [period, setPeriod] = useState<PeriodFilter>('semaine');
   const [courses, setCourses] = useState<Course[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -340,6 +341,14 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {onNavigateToPlanning && (
+            <button
+              onClick={() => onNavigateToPlanning(chauffeur.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-amber-200 text-amber-700 hover:bg-amber-50 transition-colors"
+            >
+              <Calendar className="w-3.5 h-3.5 inline mr-1" />Planning
+            </button>
+          )}
           <button
             onClick={onToggleStatus}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
