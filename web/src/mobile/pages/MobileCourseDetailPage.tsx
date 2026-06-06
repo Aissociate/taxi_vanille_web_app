@@ -180,6 +180,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
 
   const firstArret = arrets[0];
   const lastArret = arrets[arrets.length - 1];
+  const maxPassagers = chauffeur && chauffeur.vehicule_places > 1 ? chauffeur.vehicule_places - 1 : 8;
 
   if (step === 'preview') {
     return (
@@ -222,9 +223,9 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
           <div className="flex items-center justify-center gap-6 mt-4">
             <button type="button" onClick={() => setPassagersDepart(Math.max(0, passagersDepart - 1))} className="w-14 h-14 rounded-full border-2 border-gray-900 flex items-center justify-center text-2xl font-bold">-</button>
             <span className="text-5xl font-bold w-16 text-center">{passagersDepart}</span>
-            <button type="button" onClick={() => setPassagersDepart(Math.min(8, passagersDepart + 1))} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
+            <button type="button" onClick={() => setPassagersDepart(Math.min(maxPassagers, passagersDepart + 1))} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
           </div>
-          <p className="text-[10px] text-center text-gray-400 mt-2">8 passagers maximum</p>
+          <p className="text-[10px] text-center text-gray-400 mt-2">{maxPassagers} passagers maximum</p>
         </div>
         <div className="mx-4 mt-6 p-4 border border-gray-200 rounded-lg bg-white flex items-center justify-between">
           <span className="text-4xl font-bold">{passagersDepart}</span>
@@ -262,9 +263,9 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
         <div className="flex items-center justify-center gap-6 mt-4">
           <button type="button" onClick={() => setPassagersArrivee(Math.max(0, passagersArrivee - 1))} className="w-14 h-14 rounded-full border-2 border-gray-900 flex items-center justify-center text-2xl font-bold">-</button>
           <span className="text-5xl font-bold w-16 text-center">{passagersArrivee}</span>
-          <button type="button" onClick={() => setPassagersArrivee(Math.min(8, passagersArrivee + 1))} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
+          <button type="button" onClick={() => setPassagersArrivee(Math.min(maxPassagers, passagersArrivee + 1))} className="w-14 h-14 rounded-full bg-gray-900 text-white flex items-center justify-center text-2xl font-bold">+</button>
         </div>
-        <p className="text-[10px] text-center text-gray-400 mt-2">8 passagers maximum</p>
+        <p className="text-[10px] text-center text-gray-400 mt-2">{maxPassagers} passagers maximum</p>
       </div>
       <div className="flex-1" />
       <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50 mt-6">
