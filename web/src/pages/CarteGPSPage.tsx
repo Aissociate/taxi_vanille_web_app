@@ -108,9 +108,14 @@ export function CarteGPSPage() {
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
 
+    const validArrets = arrets.filter(a => a.latitude !== 0 || a.longitude !== 0);
+    const defaultCenter: L.LatLngExpression = validArrets.length > 0
+      ? [validArrets[0].latitude, validArrets[0].longitude]
+      : [-12.78, 45.15];
+
     const map = L.map(mapRef.current, {
-      center: [-20.96, 55.65],
-      zoom: 11,
+      center: defaultCenter,
+      zoom: 12,
       zoomControl: false,
     });
 
@@ -128,7 +133,7 @@ export function CarteGPSPage() {
     mapInstance.current = map;
 
     return () => { map.remove(); mapInstance.current = null; };
-  }, []);
+  }, [arrets.length]);
 
   // Update tile layer on dark mode change
   useEffect(() => {
@@ -155,7 +160,7 @@ export function CarteGPSPage() {
 
     filteredLignes.forEach(ligne => {
       const ligneArrets = arrets
-        .filter(a => a.ligne_id === ligne.id)
+        .filter(a => a.ligne_id === ligne.id && (a.latitude !== 0 || a.longitude !== 0))
         .sort((a, b) => a.ordre - b.ordre);
 
       if (ligneArrets.length < 2) return;

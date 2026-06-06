@@ -73,11 +73,24 @@ function toLocalDateStr(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function getTimezoneOffsetStr(d: Date): string {
+  const offset = -d.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const absOffset = Math.abs(offset);
+  const h = String(Math.floor(absOffset / 60)).padStart(2, '0');
+  const m = String(absOffset % 60).padStart(2, '0');
+  return `${sign}${h}:${m}`;
+}
+
 function toLocalDateTimeStr(d: Date): string {
   const date = toLocalDateStr(d);
   const h = String(d.getHours()).padStart(2, '0');
   const min = String(d.getMinutes()).padStart(2, '0');
   return `${date}T${h}:${min}`;
+}
+
+function toLocalDateTimeStrTz(d: Date): string {
+  return `${toLocalDateTimeStr(d)}:00${getTimezoneOffsetStr(d)}`;
 }
 
 function formatDateFr(d: Date): string {
@@ -315,9 +328,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
           if (!isDayAllowed(targetDate, joursFeries)) continue;
           const targetStr = toLocalDateStr(targetDate);
           sourceCourses.forEach(c => {
-            const time = c.date_heure.includes('T') ? c.date_heure.split('T')[1].slice(0, 5) : '08:00';
+            const srcDate = parseCourseDate(c.date_heure);
+            const dupDate = new Date(targetDate);
+            dupDate.setHours(srcDate.getHours(), srcDate.getMinutes(), 0, 0);
             newCourses.push({
-              date_heure: `${targetStr}T${time}`,
+              date_heure: toLocalDateTimeStrTz(dupDate),
               depart: c.depart, arrivee: c.arrivee,
               statut_planification: 'planifie', statut_realisation: 'programme',
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
@@ -333,10 +348,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
             const targetDate = new Date(sourceDate);
             targetDate.setDate(targetDate.getDate() + (weekOffset * 7));
             if (!isDayAllowed(targetDate, joursFeries)) return;
-            const targetStr = toLocalDateStr(targetDate);
-            const time = c.date_heure.includes('T') ? c.date_heure.split('T')[1].slice(0, 5) : '08:00';
             newCourses.push({
-              date_heure: `${targetStr}T${time}`,
+              date_heure: toLocalDateTimeStrTz(targetDate),
               depart: c.depart, arrivee: c.arrivee,
               statut_planification: 'planifie', statut_realisation: 'programme',
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
@@ -389,8 +402,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function openEdit(course: Course) {
+    const d = parseCourseDate(course.date_heure);
     setForm({
-      date_heure: course.date_heure.slice(0, 16),
+      date_heure: toLocalDateTimeStr(d),
       depart: course.depart,
       arrivee: course.arrivee,
       statut_planification: course.statut_planification || 'planifie',
@@ -439,8 +453,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
     await supabase.from('astreintes').insert({
       chauffeur_id: astreinteForm.chauffeur_id,
       ligne_id: astreinteForm.ligne_id,
-      date_debut: astreinteForm.date_debut,
-      date_fin: astreinteForm.date_fin,
+      date_debut: toLocalDateTimeStrTz(new Date(astreinteForm.date_debut)),
+      date_fin: toLocalDateTimeStrTz(new Date(astreinteForm.date_fin)),
       is_brouillon: astreinteForm.is_brouillon,
       notes: astreinteForm.notes,
       user_id: user.id,
@@ -451,8 +465,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const formDate = new Date(form.date_heure);
     const payload = {
       ...form,
+      date_heure: toLocalDateTimeStrTz(formDate),
       chauffeur_id: form.chauffeur_id || null,
       client_id: form.client_id || null,
       ligne_id: form.ligne_id || null,
