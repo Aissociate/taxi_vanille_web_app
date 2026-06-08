@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../lib/store';
 import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue';
 import { getCurrentPosition, requestLocationPermission } from '../lib/native';
+import MobileIncidentSheet from '../components/MobileIncidentSheet';
 import type { Course, CourseExecution, LigneArret } from '../lib/types';
 
 type Step = 'preview' | 'depart' | 'arrivee';
@@ -23,6 +24,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
   const [passagersArrivee, setPassagersArrivee] = useState(0);
   const [loading, setLoading] = useState(true);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
+  const [showIncident, setShowIncident] = useState(false);
   const gpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<Date | null>(null);
@@ -43,6 +45,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     if (isOnline()) {
       const { data: courseData } = await supabase.from('courses').select('*, ligne:lignes(*)').eq('id', courseId).maybeSingle();
       if (!courseData) { onNavigate('/mobile/planning'); return; }
+      if (courseData.statut_realisation === 'termine' || courseData.statut === 'terminee') { onNavigate('/mobile/planning'); return; }
       setCourse(courseData as any);
       cacheData(`course_${courseId}`, courseData);
 
@@ -268,9 +271,20 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
         <p className="text-[10px] text-center text-gray-400 mt-2">{maxPassagers} passagers maximum</p>
       </div>
       <div className="flex-1" />
-      <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50 mt-6">
+      <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50 mt-6 space-y-2">
+        <button type="button" onClick={() => setShowIncident(true)} className="w-full flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-700 py-3 rounded-lg font-semibold text-sm active:bg-red-100">
+          <AlertTriangle size={16} /> SIGNALER UN INCIDENT
+        </button>
         <button type="button" onClick={handleTerminer} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700">TERMINER LA COURSE</button>
       </div>
+      {showIncident && chauffeur && (
+        <MobileIncidentSheet
+          onClose={() => setShowIncident(false)}
+          chauffeurId={chauffeur.id}
+          userId={chauffeur.user_id || chauffeur.id}
+          courseId={courseId}
+        />
+      )}
     </div>
   );
 }

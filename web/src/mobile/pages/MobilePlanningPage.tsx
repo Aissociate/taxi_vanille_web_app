@@ -321,13 +321,15 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
           courses.map((course) => {
             const statut = getStatut(course);
             const isActive = statut === 'en_cours';
+            const isTermine = statut === 'termine';
             return (
               <button
                 key={course.id}
                 type="button"
-                onClick={() => onNavigate(`/mobile/course/${course.id}`)}
+                onClick={() => { if (!isTermine) onNavigate(`/mobile/course/${course.id}`); }}
+                disabled={isTermine}
                 className={`w-full text-left rounded-lg border p-4 transition-all ${
-                  isActive ? 'border-green-500 border-2 bg-white' : statut === 'termine' ? 'border-l-4 border-l-green-500 border-gray-200 bg-white' : 'border-gray-200 bg-white'
+                  isActive ? 'border-green-500 border-2 bg-white' : isTermine ? 'border-l-4 border-l-green-500 border-gray-200 bg-gray-50 opacity-60' : 'border-gray-200 bg-white'
                 }`}
               >
                 <div className="flex items-start justify-between">

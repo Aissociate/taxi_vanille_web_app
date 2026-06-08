@@ -235,7 +235,7 @@ export function DashboardPage() {
   const completedExecs = executions.filter(e => e.heure_fin);
   const avgRealDuration = completedExecs.length > 0
     ? completedExecs.reduce((s, e) => s + (new Date(e.heure_fin!).getTime() - new Date(e.heure_debut).getTime()) / 60000, 0) / completedExecs.length
-    : 0;
+    : -1;
 
   const latestIncident = incidents[0];
   const latestIncidentChauffeur = latestIncident ? chauffeurs.find(c => c.id === latestIncident.chauffeur_id) : null;
@@ -349,7 +349,7 @@ export function DashboardPage() {
             />
             <KpiCard
               label="Courses realisees"
-              value={String(nbCoursesRealisees)}
+              value={`${nbCoursesRealisees} / ${trajetsTheoriques}`}
               variation={prevNbCourses > 0 ? ((nbCoursesRealisees - prevNbCourses) / prevNbCourses * 100) : 0}
               suffix={periodSuffix}
             />
@@ -467,7 +467,7 @@ export function DashboardPage() {
             <StatCard label="Taux realisation" value={`${tauxRealisation.toFixed(1)}%`} sub="objectif 95%" highlight={tauxRealisation >= 95} />
             <StatCard
               label="Duree moy. reelle"
-              value={avgRealDuration > 0 ? `${avgRealDuration.toFixed(0)} mn` : '-'}
+              value={avgRealDuration > 0 ? `${Math.max(1, Math.round(avgRealDuration))} mn` : '-'}
               sub={`${completedExecs.length} executions`}
             />
             <StatCard label="Courses / jour" value={voyMoyenParJour.toFixed(1)} sub={`${nbJoursPeriode} jours`} />

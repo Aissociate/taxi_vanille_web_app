@@ -225,6 +225,24 @@ export function TraficPage() {
                     {/* Execution indicators */}
                     {execution && (
                       <div className="flex items-center gap-3 text-xs">
+                        {execution.heure_debut && (
+                          <span className={`px-2 py-0.5 rounded ${
+                            (() => {
+                              const scheduled = new Date(course.date_heure).getTime();
+                              const actual = new Date(execution.heure_debut).getTime();
+                              const delayMin = Math.round((actual - scheduled) / 60000);
+                              return delayMin > 5 ? 'bg-red-50 text-red-600' : 'bg-gray-100 text-gray-600';
+                            })()
+                          }`}>
+                            {new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                            {' → '}
+                            {new Date(execution.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                            {(() => {
+                              const delayMin = Math.round((new Date(execution.heure_debut).getTime() - new Date(course.date_heure).getTime()) / 60000);
+                              return delayMin > 5 ? ` (+${delayMin} mn)` : '';
+                            })()}
+                          </span>
+                        )}
                         {(coursePassengers > 0 || courseDescendants > 0) && (
                           <span className="flex items-center gap-1 text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
                             <Users className="w-3 h-3" /> {coursePassengers} mont. / {courseDescendants} desc.
@@ -232,7 +250,7 @@ export function TraficPage() {
                         )}
                         {execution.heure_debut && execution.heure_fin && (
                           <span className="text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                            {Math.round((new Date(execution.heure_fin).getTime() - new Date(execution.heure_debut).getTime()) / 60000)} mn
+                            {Math.max(1, Math.round((new Date(execution.heure_fin).getTime() - new Date(execution.heure_debut).getTime()) / 60000))} mn
                           </span>
                         )}
                       </div>
