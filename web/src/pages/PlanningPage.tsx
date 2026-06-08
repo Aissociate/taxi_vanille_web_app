@@ -124,6 +124,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [chauffeurs, setChauffeurs] = useState<Chauffeur[]>([]);
   const [lignes, setLignes] = useState<Ligne[]>([]);
+  const [ligneArrets, setLigneArrets] = useState<{ ligne_id: string; nom: string; ordre: number }[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [astreintes, setAstreintes] = useState<Astreinte[]>([]);
   const [lineFilter, setLineFilter] = useState<string>('all');
@@ -182,14 +183,16 @@ export function PlanningPage({ user }: PlanningPageProps) {
   useEffect(() => { loadCourses(); loadAstreintes(); }, [currentDate, view]);
 
   async function loadRefs() {
-    const [ch, li, cl] = await Promise.all([
+    const [ch, li, cl, ar] = await Promise.all([
       supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id, is_coordinateur').order('code, nom'),
       supabase.from('lignes').select('id, code, nom, depart, arrivee, couleur').eq('active', true).order('code'),
       supabase.from('clients').select('id, nom'),
+      supabase.from('ligne_arrets').select('ligne_id, nom, ordre').order('ordre', { ascending: true }),
     ]);
     if (ch.data) setChauffeurs(ch.data);
     if (li.data) setLignes(li.data);
     if (cl.data) setClients(cl.data);
+    if (ar.data) setLigneArrets(ar.data);
   }
 
   function getDateRange(): { from: string; to: string } {
@@ -435,6 +438,20 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setEditingCourse(course);
     setShowForm(true);
   }
+
+  // Points selectionnables (arrets + terminus) de la ligne choisie dans le formulaire
+  const arretOptions = useMemo(() => {
+    const points: string[] = [];
+    const ligne = lignes.find(l => l.id === form.ligne_id);
+    if (ligne) {
+      if (ligne.depart) points.push(ligne.depart);
+      if (ligne.arrivee) points.push(ligne.arrivee);
+    }
+    ligneArrets
+      .filter(a => a.ligne_id === form.ligne_id && a.nom)
+      .forEach(a => points.push(a.nom));
+    return Array.from(new Set(points));
+  }, [form.ligne_id, ligneArrets, lignes]);
 
   async function publishDrafts() {
     const { from, to } = getDateRange();
@@ -1309,12 +1326,15 @@ export function PlanningPage({ user }: PlanningPageProps) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Depart</label>
-                  <input type="text" value={form.depart} onChange={(e) => setForm({ ...form, depart: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" required />
+                  <input type="text" list="course-arret-options" value={form.depart} onChange={(e) => setForm({ ...form, depart: e.target.value })} placeholder={arretOptions.length ? 'Selectionner ou saisir...' : ''} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" required />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Arrivee</label>
-                  <input type="text" value={form.arrivee} onChange={(e) => setForm({ ...form, arrivee: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" required />
+                  <input type="text" list="course-arret-options" value={form.arrivee} onChange={(e) => setForm({ ...form, arrivee: e.target.value })} placeholder={arretOptions.length ? 'Selectionner ou saisir...' : ''} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" required />
                 </div>
+                <datalist id="course-arret-options">
+                  {arretOptions.map(p => <option key={p} value={p} />)}
+                </datalist>
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
