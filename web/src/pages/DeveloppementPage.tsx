@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { Bug, MessageCircle, Lightbulb, ThumbsUp, ThumbsDown, Send, Plus, X, ChevronDown, ChevronUp, Image, CheckCircle2 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
@@ -587,17 +587,86 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
         </div>
       )}
 
-      {/* Screenshot modal */}
+      {/* Screenshot modal with zoom */}
       {screenshotModal && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setScreenshotModal(null)}>
-          <div className="relative max-w-4xl max-h-[90vh]">
-            <button onClick={() => setScreenshotModal(null)} className="absolute -top-3 -right-3 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center text-gray-600 hover:text-gray-900">
-              <X className="w-4 h-4" />
-            </button>
-            <img src={screenshotModal} alt="Screenshot" className="max-w-full max-h-[85vh] rounded-xl shadow-2xl" />
-          </div>
-        </div>
+        <ScreenshotZoomModal src={screenshotModal} onClose={() => setScreenshotModal(null)} />
       )}
+    </div>
+  );
+}
+
+function ScreenshotZoomModal({ src, onClose }: { src: string; onClose: () => void }) {
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+  const posStart = useRef({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.15 : 0.15;
+    setScale(s => Math.min(5, Math.max(0.5, s + delta)));
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (scale <= 1) return;
+    e.preventDefault();
+    setDragging(true);
+    dragStart.current = { x: e.clientX, y: e.clientY };
+    posStart.current = { ...position };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!dragging) return;
+    setPosition({
+      x: posStart.current.x + (e.clientX - dragStart.current.x),
+      y: posStart.current.y + (e.clientY - dragStart.current.y),
+    });
+  };
+
+  const handleMouseUp = () => setDragging(false);
+
+  const resetZoom = () => { setScale(1); setPosition({ x: 0, y: 0 }); };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/85 z-50 flex flex-col"
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+    >
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-2">
+          <button onClick={() => setScale(s => Math.min(5, s + 0.25))} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-sm font-medium transition-colors">+</button>
+          <button onClick={() => setScale(s => Math.max(0.5, s - 0.25))} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-sm font-medium transition-colors">-</button>
+          <button onClick={resetZoom} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors">Reset</button>
+          <span className="text-white/60 text-xs ml-2">{Math.round(scale * 100)}%</span>
+        </div>
+        <button onClick={onClose} className="w-8 h-8 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white transition-colors">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-hidden flex items-center justify-center"
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        style={{ cursor: scale > 1 ? (dragging ? 'grabbing' : 'grab') : 'zoom-in' }}
+        onClick={(e) => { if (scale <= 1 && e.target === containerRef.current) setScale(2); }}
+      >
+        <img
+          src={src}
+          alt="Screenshot"
+          className="max-w-full max-h-full rounded-lg select-none"
+          draggable={false}
+          style={{
+            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+            transition: dragging ? 'none' : 'transform 0.15s ease-out',
+          }}
+        />
+      </div>
+      <p className="text-center text-white/40 text-xs pb-3">Molette pour zoomer - Cliquer-glisser pour deplacer</p>
     </div>
   );
 }
