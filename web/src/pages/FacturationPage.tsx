@@ -139,37 +139,21 @@ export function FacturationPage({ user }: FacturationPageProps) {
 
   async function updateStatus(id: string, newStatus: KanbanStatus) {
     if (newStatus === 'payee') {
-      const fac = factures.find(f => f.id === id);
-      if (fac && fac.chauffeur_id && fac.remboursement_avance > 0) {
-        await imputeAvanceOnPay(fac);
+      // Atomic server-side payment: locks the facture, imputes the advances
+      // and flips the statut in one transaction (no double imputation if two
+      // payments run at the same time).
+      const { error } = await supabase.rpc('payer_facture', { p_facture_id: id });
+      if (error) {
+        alert(error.message.includes('facture_deja_payee')
+          ? 'Cette facture est deja payee.'
+          : `Erreur lors du paiement: ${error.message}`);
       }
+      loadAll();
+      return;
     }
-    await supabase.from('factures').update({ statut: newStatus }).eq('id', id);
+    const { error } = await supabase.from('factures').update({ statut: newStatus }).eq('id', id);
+    if (error) alert(`Erreur lors du changement de statut: ${error.message}`);
     loadAll();
-  }
-
-  async function imputeAvanceOnPay(fac: Facture) {
-    if (!fac.chauffeur_id || fac.remboursement_avance <= 0) return;
-    const { data: avances } = await supabase
-      .from('chauffeur_avances')
-      .select('id, montant, statut')
-      .eq('chauffeur_id', fac.chauffeur_id)
-      .eq('statut', 'en_cours')
-      .order('date_avance', { ascending: true });
-
-    if (!avances || avances.length === 0) return;
-
-    let restant = fac.remboursement_avance;
-    for (const av of avances) {
-      if (restant <= 0) break;
-      if (av.montant <= restant) {
-        await supabase.from('chauffeur_avances').update({ montant: 0, statut: 'rembourse' }).eq('id', av.id);
-        restant -= av.montant;
-      } else {
-        await supabase.from('chauffeur_avances').update({ montant: av.montant - restant }).eq('id', av.id);
-        restant = 0;
-      }
-    }
   }
 
   async function deleteFacture(id: string) {
@@ -593,7 +577,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const montantNonPlanifie = nbNonPlanifie * tarifNonPlanifie;
   const montantLocation = locationVehicule ? tarifLocation : 0;
   const montantFraisGestion = fraisGestion ? tarifFraisGestion : 0;
-  const kmParcourus = kmFinMois - kmDebutMois;
+  // Coherence check: an end-of-month odometer lower than the start one means a
+  // bad reading (or a vehicle change) — flag it instead of silently billing 0.
+  const kmIncoherent = kmFinMois > 0 && kmFinMois < kmDebutMois;
+  const kmParcourus = kmIncoherent ? 0 : kmFinMois - kmDebutMois;
   const kmSurplus = Math.max(0, kmParcourus - seuilKm);
   const montantDepassementKm = kmSurplus * tarifKmDepassement;
   const montantLignesSupp = lignesSupp.reduce((s, l) => s + (l.quantite * l.montant), 0);
@@ -618,6 +605,9 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   }
 
   async function handleSave(statut: string) {
+    if (kmIncoherent && !confirm('Le kilometrage est incoherent (fin < debut) : le depassement km sera facture 0. Enregistrer quand meme ?')) {
+      return;
+    }
     setSaving(true);
     try {
       const numero = facture?.numero || `F${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`;
@@ -655,10 +645,15 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         user_id: user.id,
       };
 
-      if (facture) {
-        await supabase.from('factures').update(payload).eq('id', facture.id);
-      } else {
-        await supabase.from('factures').insert(payload);
+      const { error } = facture
+        ? await supabase.from('factures').update(payload).eq('id', facture.id)
+        : await supabase.from('factures').insert(payload);
+
+      if (error) {
+        alert(error.code === '23505'
+          ? 'Une facture existe deja pour ce chauffeur et ce mois de reference.'
+          : `Erreur lors de l'enregistrement: ${error.message}`);
+        return;
       }
       onSaved();
     } finally {
@@ -895,6 +890,15 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
                     <span className="text-gray-500">Parcourus: {kmParcourus.toFixed(0)} km | Surplus: {kmSurplus.toFixed(0)} km</span>
                     <span className="font-bold text-red-700">-{montantDepassementKm.toFixed(2)} EUR</span>
                   </div>
+                  {kmIncoherent && (
+                    <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+                      <span className="font-bold shrink-0">!</span>
+                      <span>
+                        Kilometrage incoherent : le km de fin ({kmFinMois.toLocaleString('fr-FR')}) est inferieur au km de debut ({kmDebutMois.toLocaleString('fr-FR')}).
+                        Verifiez les releves du chauffeur avant de valider — le depassement km est calcule a 0 par defaut.
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Remboursement avance */}
