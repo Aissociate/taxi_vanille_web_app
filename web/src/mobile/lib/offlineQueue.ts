@@ -1,11 +1,19 @@
 import { supabase } from '../../lib/supabase';
 
+export interface QueuedMedia {
+  bucket: string;
+  path: string;
+  dataUrl: string;
+  field: string;
+}
+
 interface QueuedOperation {
   id: string;
   table: string;
   type: 'insert' | 'update';
   data: Record<string, unknown>;
   filter?: { column: string; value: string };
+  media?: QueuedMedia[];
   createdAt: string;
 }
 
@@ -36,7 +44,20 @@ export function isOnline(): boolean {
 export function enqueue(op: Omit<QueuedOperation, 'id' | 'createdAt'>) {
   const queue = getQueue();
   queue.push({ ...op, id: generateId(), createdAt: new Date().toISOString() });
-  saveQueue(queue);
+  try {
+    saveQueue(queue);
+  } catch {
+    // localStorage quota exceeded: retry without the (heavy) media payloads so
+    // the operation itself is not lost.
+    if (op.media?.length) {
+      queue[queue.length - 1] = { ...queue[queue.length - 1], media: undefined };
+      try {
+        saveQueue(queue);
+      } catch {
+        // Still full: drop the new operation, nothing else we can do.
+      }
+    }
+  }
 }
 
 export function getPendingCount(): number {
@@ -52,6 +73,22 @@ export async function syncQueue(): Promise<{ synced: number; failed: number }> {
 
   for (const op of queue) {
     try {
+      // Upload any media captured offline first, then patch the row data with
+      // the resulting public URLs. If an upload fails the whole operation stays
+      // queued so the media is not silently lost.
+      if (op.media?.length) {
+        for (const m of op.media) {
+          if (op.data[m.field]) continue; // already uploaded on a previous attempt
+          const blob = await (await fetch(m.dataUrl)).blob();
+          const { data: uploaded, error: uploadError } = await supabase.storage
+            .from(m.bucket)
+            .upload(m.path, blob, { upsert: true });
+          if (uploadError || !uploaded) throw uploadError || new Error('upload failed');
+          const { data: urlData } = supabase.storage.from(m.bucket).getPublicUrl(uploaded.path);
+          op.data[m.field] = urlData.publicUrl;
+        }
+      }
+
       if (op.type === 'insert') {
         const { error } = await supabase.from(op.table).insert(op.data);
         if (error) throw error;

@@ -4,8 +4,9 @@ export interface Chauffeur {
   prenom: string;
   telephone: string;
   code: string;
-  pin: string;
-  pin_android: string | null;
+  // Never returned to the client anymore (stripped by the chauffeur_login RPC)
+  pin?: string;
+  pin_android?: string | null;
   is_coordinateur: boolean;
   ligne_id: string | null;
   statut: string;

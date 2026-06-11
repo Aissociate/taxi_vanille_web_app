@@ -4,6 +4,11 @@ import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
 import type { Chauffeur, Incident } from '../lib/types';
 
+// Columns the anon role is allowed to read on chauffeurs (column-level grant,
+// see migration 20260611120000): selecting * would be rejected.
+const CHAUFFEUR_PUBLIC_COLS =
+  'id, code, nom, prenom, telephone, statut, is_coordinateur, ligne_id, vehicule_immatriculation, vehicule_places, user_id';
+
 interface CourseWithChauffeur {
   id: string;
   date_heure: string;
@@ -53,8 +58,8 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
 
     const [coursesRes, incidentsRes] = await Promise.all([
-      supabase.from('courses').select('*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(*), ligne:lignes(*)').neq('chauffeur_id', chauffeur.id).gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
-      supabase.from('incidents').select('*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(*)').gte('created_at', startOfDay).order('created_at', { ascending: false }),
+      supabase.from('courses').select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`).neq('chauffeur_id', chauffeur.id).gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
+      supabase.from('incidents').select(`*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS})`).gte('created_at', startOfDay).order('created_at', { ascending: false }),
     ]);
 
     if (coursesRes.data) {
@@ -90,7 +95,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     const startOfDay = new Date(Date.UTC(y, m, d)).toISOString();
     const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
 
-    const { data: allChauffeurs } = await supabase.from('chauffeurs').select('*').eq('statut', 'actif').neq('id', course.chauffeur_id).neq('id', chauffeur!.id);
+    const { data: allChauffeurs } = await supabase.from('chauffeurs').select(CHAUFFEUR_PUBLIC_COLS).eq('statut', 'actif').neq('id', course.chauffeur_id).neq('id', chauffeur!.id);
     const { data: busyCourses } = await supabase.from('courses').select('chauffeur_id').gte('date_heure', startOfDay).lt('date_heure', endOfDay).neq('statut', 'annulee');
     const busyIds = new Set(busyCourses?.map((c) => c.chauffeur_id) || []);
     setAvailableDrivers((allChauffeurs || []).filter((ch) => !busyIds.has(ch.id)) as Chauffeur[]);

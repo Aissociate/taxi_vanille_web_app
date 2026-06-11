@@ -5,6 +5,11 @@ import { supabase } from '../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
 import type { Chauffeur, Incident } from '../lib/types';
 
+// Columns the anon role is allowed to read on chauffeurs (column-level grant,
+// see migration 20260611120000): selecting * would be rejected.
+const CHAUFFEUR_PUBLIC_COLS =
+  'id, code, nom, prenom, telephone, statut, is_coordinateur, ligne_id, vehicule_immatriculation, vehicule_places, user_id';
+
 interface CourseWithChauffeur {
   id: string;
   date_heure: string;
@@ -70,19 +75,19 @@ export default function CoordinatorPage() {
     const [coursesRes, incidentsRes, tomorrowRes] = await Promise.all([
       supabase
         .from('courses')
-        .select('*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(*), ligne:lignes(*)')
+        .select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`)
         .neq('chauffeur_id', chauffeur.id)
         .gte('date_heure', startOfDay)
         .lt('date_heure', endOfDay)
         .order('date_heure', { ascending: true }),
       supabase
         .from('incidents')
-        .select('*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(*)')
+        .select(`*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS})`)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false }),
       supabase
         .from('courses')
-        .select('*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(*), ligne:lignes(*)')
+        .select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`)
         .neq('chauffeur_id', chauffeur.id)
         .gte('date_heure', endOfDay)
         .lt('date_heure', endOfTomorrow)
@@ -189,7 +194,7 @@ export default function CoordinatorPage() {
     // Get all chauffeurs who do NOT have a course at the same time
     const { data: allChauffeurs } = await supabase
       .from('chauffeurs')
-      .select('*')
+      .select(CHAUFFEUR_PUBLIC_COLS)
       .eq('statut', 'actif')
       .neq('id', course.chauffeur_id)
       .neq('id', chauffeur!.id);

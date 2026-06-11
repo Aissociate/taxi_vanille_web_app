@@ -47,23 +47,20 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
-    let query = supabase
-      .from('chauffeurs')
-      .select('*')
-      .eq('code', code.trim().toUpperCase());
-
-    if (role === 'coordinateur') {
-      // Coordinators authenticate with their dedicated Android PIN set in the
-      // back-office (chauffeurs.pin_android), and must actually be a coordinator.
-      query = query.eq('pin_android', pinCode).eq('is_coordinateur', true);
-    } else {
-      query = query.eq('pin', pinCode);
-    }
-
-    const { data, error: fetchError } = await query.maybeSingle();
+    // Server-side verification (SECURITY DEFINER + rate limiting): the PIN is
+    // checked in the database and never read back by the client.
+    const { data, error: fetchError } = await supabase.rpc('chauffeur_login', {
+      p_code: code.trim().toUpperCase(),
+      p_pin: pinCode,
+      p_role: role,
+    });
 
     if (fetchError || !data) {
-      setError('Code ou PIN incorrect');
+      setError(
+        fetchError?.message?.includes('too_many_attempts')
+          ? 'Trop de tentatives. Reessayez dans 15 minutes.'
+          : 'Code ou PIN incorrect'
+      );
       setPin('');
       setLoading(false);
       return;

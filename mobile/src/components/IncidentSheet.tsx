@@ -117,46 +117,59 @@ export default function IncidentSheet({ onClose, chauffeurId, userId, courseId }
     return urlData.publicUrl;
   };
 
+  const blobToDataUrl = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+
   const handleSubmit = async () => {
     if (!selectedType) return;
     setSending(true);
 
     const timestamp = Date.now();
-    let photoUrl: string | null = null;
-    let audioUrl: string | null = null;
+    // Videos go in video_url, photos in photo_url
+    const mediaField = mediaType === 'video' ? 'video_url' : 'photo_url';
+    const mediaExt = mediaFile?.name.split('.').pop() || (mediaType === 'video' ? 'mp4' : 'jpg');
+    const mediaPath = `${chauffeurId}/${timestamp}.${mediaExt}`;
+    const audioPath = `${chauffeurId}/${timestamp}.webm`;
+
+    const incidentData: Record<string, unknown> = {
+      course_id: courseId || null,
+      chauffeur_id: chauffeurId,
+      type: selectedType,
+      description: '',
+      photo_url: null,
+      video_url: null,
+      audio_url: null,
+      user_id: userId,
+    };
 
     if (isOnline()) {
       if (mediaFile) {
-        const ext = mediaFile.name.split('.').pop() || (mediaType === 'video' ? 'mp4' : 'jpg');
-        photoUrl = await uploadFile(mediaFile, `${chauffeurId}/${timestamp}.${ext}`);
+        incidentData[mediaField] = await uploadFile(mediaFile, mediaPath);
       }
-
       if (audioBlob) {
-        audioUrl = await uploadFile(audioBlob, `${chauffeurId}/${timestamp}.webm`);
+        incidentData.audio_url = await uploadFile(audioBlob, audioPath);
       }
-
-      await supabase.from('incidents').insert({
-        course_id: courseId || null,
-        chauffeur_id: chauffeurId,
-        type: selectedType,
-        description: '',
-        photo_url: photoUrl,
-        audio_url: audioUrl,
-        user_id: userId,
-      });
+      await supabase.from('incidents').insert(incidentData);
     } else {
+      // Keep the media as data URLs in the queue so they are uploaded when
+      // the connection comes back, instead of being silently dropped.
+      const media: { bucket: string; path: string; dataUrl: string; field: string }[] = [];
+      if (mediaFile) {
+        media.push({ bucket: 'incidents', path: mediaPath, dataUrl: await blobToDataUrl(mediaFile), field: mediaField });
+      }
+      if (audioBlob) {
+        media.push({ bucket: 'incidents', path: audioPath, dataUrl: await blobToDataUrl(audioBlob), field: 'audio_url' });
+      }
       enqueue({
         table: 'incidents',
         type: 'insert',
-        data: {
-          course_id: courseId || null,
-          chauffeur_id: chauffeurId,
-          type: selectedType,
-          description: '',
-          photo_url: null,
-          audio_url: null,
-          user_id: userId,
-        },
+        data: incidentData,
+        media: media.length > 0 ? media : undefined,
       });
     }
 
