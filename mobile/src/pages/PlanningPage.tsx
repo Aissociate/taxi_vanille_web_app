@@ -65,6 +65,7 @@ export default function PlanningPage() {
   const [kmRequired, setKmRequired] = useState<{ type: 'debut_mois' | 'fin_mois'; mois: string } | null>(null);
   const [kmChecked, setKmChecked] = useState(false);
   const [hasAstreinte, setHasAstreinte] = useState(false);
+  const [plannedAstreinteId, setPlannedAstreinteId] = useState<string | null>(null);
   const [astreinteSession, setAstreinteSession] = useState<AstreinteSession | null>(null);
   const [astreinteElapsed, setAstreinteElapsed] = useState('00:00:00');
   const astreinteGpsRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -210,26 +211,31 @@ export default function PlanningPage() {
     if (!chauffeur) return;
     setLoading(true);
 
+    // Local-day window: the back-office plans courses in local time, so the
+    // driver's "today" must match the local calendar day, not the UTC one.
     const today = new Date();
-    const y = today.getUTCFullYear();
-    const m = today.getUTCMonth();
-    const d = today.getUTCDate();
-    const startOfDay = new Date(Date.UTC(y, m, d)).toISOString();
-    const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
-    const endOfTomorrow = new Date(Date.UTC(y, m, d + 2)).toISOString();
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    const d = today.getDate();
+    const startOfDay = new Date(y, m, d).toISOString();
+    const endOfDay = new Date(y, m, d + 1).toISOString();
+    const endOfTomorrow = new Date(y, m, d + 2).toISOString();
 
-    const [todayRes, tomorrowRes] = await Promise.all([
+    // Drafts and replaced courses must never reach the driver
+    const visibleCourses = () =>
       supabase
         .from('courses')
         .select('*, ligne:lignes(*)')
         .eq('chauffeur_id', chauffeur.id)
+        .or('is_brouillon.is.null,is_brouillon.eq.false')
+        .or('statut_realisation.is.null,statut_realisation.neq.remplace');
+
+    const [todayRes, tomorrowRes] = await Promise.all([
+      visibleCourses()
         .gte('date_heure', startOfDay)
         .lt('date_heure', endOfDay)
         .order('date_heure', { ascending: true }),
-      supabase
-        .from('courses')
-        .select('*, ligne:lignes(*)')
-        .eq('chauffeur_id', chauffeur.id)
+      visibleCourses()
         .gte('date_heure', endOfDay)
         .lt('date_heure', endOfTomorrow)
         .order('date_heure', { ascending: true }),
@@ -251,9 +257,29 @@ export default function PlanningPage() {
       setLastSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
 
       const astreinteCourses = todayRes.data.filter((c: any) => c.is_astreinte === true);
-      if (astreinteCourses.length > 0) {
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // Also honor astreintes planned by the back-office in the dedicated
+      // `astreintes` table (not only courses flagged is_astreinte).
+      let plannedId: string | null = null;
+      if (isOnline()) {
+        const { data: planned } = await supabase
+          .from('astreintes')
+          .select('id')
+          .eq('chauffeur_id', chauffeur.id)
+          .or('is_brouillon.is.null,is_brouillon.eq.false')
+          .lte('date_debut', endOfDay)
+          .gte('date_fin', startOfDay)
+          .limit(1);
+        plannedId = planned?.[0]?.id ?? null;
+        cacheData(`astreinte_planned_${chauffeur.id}_${todayStr}`, plannedId);
+      } else {
+        plannedId = getCachedData<string | null>(`astreinte_planned_${chauffeur.id}_${todayStr}`) ?? null;
+      }
+      setPlannedAstreinteId(plannedId);
+
+      if (astreinteCourses.length > 0 || plannedId) {
         setHasAstreinte(true);
-        const todayStr = new Date().toISOString().split('T')[0];
 
         if (isOnline()) {
           const { data: session } = await supabase
@@ -325,6 +351,7 @@ export default function PlanningPage() {
       chauffeur_id: chauffeur.id,
       date: todayStr,
       heure_debut: now,
+      astreinte_id: plannedAstreinteId,
       user_id: chauffeur.user_id || chauffeur.id,
     };
 

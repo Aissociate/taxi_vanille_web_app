@@ -268,10 +268,22 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     let typeJour = 'lun_ven';
     if (dow === 6) typeJour = 'samedi';
     else if (dow === 0) typeJour = 'dimanche';
-    const heure = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
-    const plage = tarifPlages.find(p =>
-      p.type_jour === typeJour && p.heure_debut <= heure && p.heure_fin > heure
-    );
+    // Minutes-based matching with midnight-crossing support (e.g. 21:00-05:00),
+    // same logic as FacturationPage.findPlageForTime — string comparison broke
+    // night plages.
+    const toMinutes = (hhmm: string) => {
+      const [h, mi] = (hhmm || '00:00').split(':').map(Number);
+      return (h || 0) * 60 + (mi || 0);
+    };
+    const minutes = d.getHours() * 60 + d.getMinutes();
+    const plage = tarifPlages.find(p => {
+      if (p.type_jour !== typeJour) return false;
+      const start = toMinutes(p.heure_debut);
+      const end = toMinutes(p.heure_fin);
+      return start <= end
+        ? minutes >= start && minutes < end
+        : minutes >= start || minutes < end;
+    });
     return plage?.tarif || 0;
   }
 

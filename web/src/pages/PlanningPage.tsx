@@ -546,7 +546,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       depart: editingCourse.depart,
       arrivee: editingCourse.arrivee,
       statut_planification: 'non_planifie',
-      statut_realisation: 'en_cours',
+      statut_realisation: 'programme',
       montant: editingCourse.montant,
       notes: editingCourse.notes ? `[Remplacement] ${editingCourse.notes}` : '[Remplacement]',
       chauffeur_id: replaceChauffeurId,

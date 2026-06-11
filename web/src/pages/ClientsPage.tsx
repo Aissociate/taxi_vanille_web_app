@@ -93,7 +93,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
   }
 
   async function loadCourses() {
-    const { data } = await supabase.from('courses').select('id, client_id, date_heure, montant, statut, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes');
+    const { data } = await supabase.from('courses').select('id, client_id, date_heure, montant, statut, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart');
     if (data) setCourses(data);
   }
 

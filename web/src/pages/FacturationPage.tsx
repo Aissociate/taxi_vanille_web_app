@@ -407,14 +407,16 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         .order('created_at', { ascending: true }),
     ]);
 
-    if (kmRes.data) {
-      setKmDebutMois(kmRes.data.km_debut || 0);
-      setKmFinMois(kmRes.data.km_fin || 0);
-    } else if (kmAndroidRes.data && kmAndroidRes.data.length > 0) {
+    // Android driver readings (table kilometrage) are the live source of
+    // truth; the legacy chauffeur_kilometres table is only a fallback.
+    if (kmAndroidRes.data && kmAndroidRes.data.length > 0) {
       const debut = kmAndroidRes.data.find(k => k.type === 'debut_mois');
       const fin = kmAndroidRes.data.find(k => k.type === 'fin_mois');
       if (debut) setKmDebutMois(debut.km_value);
       if (fin) setKmFinMois(fin.km_value);
+    } else if (kmRes.data) {
+      setKmDebutMois(kmRes.data.km_debut || 0);
+      setKmFinMois(kmRes.data.km_fin || 0);
     }
 
     // Calculate solde avances en cours

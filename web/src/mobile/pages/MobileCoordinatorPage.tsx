@@ -19,6 +19,8 @@ interface CourseWithChauffeur {
   statut_realisation: string | null;
   chauffeur_id: string;
   user_id: string;
+  periode?: string;
+  duree_minutes?: number;
   chauffeur?: Chauffeur;
   ligne?: { id: string; nom: string; code: string; couleur: string; nb_arrets: number };
   incident?: Incident | null;
@@ -52,13 +54,19 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const fetchAll = async () => {
     if (!chauffeur) return;
     setLoading(true);
+    // Local-day window, aligned with the back-office planning (local time)
     const today = new Date();
-    const y = today.getUTCFullYear(), m = today.getUTCMonth(), d = today.getUTCDate();
-    const startOfDay = new Date(Date.UTC(y, m, d)).toISOString();
-    const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
+    const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
+    const startOfDay = new Date(y, m, d).toISOString();
+    const endOfDay = new Date(y, m, d + 1).toISOString();
 
     const [coursesRes, incidentsRes] = await Promise.all([
-      supabase.from('courses').select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`).neq('chauffeur_id', chauffeur.id).gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
+      // Drafts and replaced courses are hidden (the replacement course is shown)
+      supabase.from('courses').select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`)
+        .neq('chauffeur_id', chauffeur.id)
+        .or('is_brouillon.is.null,is_brouillon.eq.false')
+        .or('statut_realisation.is.null,statut_realisation.neq.remplace')
+        .gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
       supabase.from('incidents').select(`*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS})`).gte('created_at', startOfDay).order('created_at', { ascending: false }),
     ]);
 
@@ -91,13 +99,28 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const handleStartReplacement = async (course: CourseWithChauffeur) => {
     setReplacementCourse(course);
     const today = new Date();
-    const y = today.getUTCFullYear(), m = today.getUTCMonth(), d = today.getUTCDate();
-    const startOfDay = new Date(Date.UTC(y, m, d)).toISOString();
-    const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
+    const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
+    const startOfDay = new Date(y, m, d).toISOString();
+    const endOfDay = new Date(y, m, d + 1).toISOString();
 
+    // A driver is busy only if one of his courses OVERLAPS the slot to replace
     const { data: allChauffeurs } = await supabase.from('chauffeurs').select(CHAUFFEUR_PUBLIC_COLS).eq('statut', 'actif').neq('id', course.chauffeur_id).neq('id', chauffeur!.id);
-    const { data: busyCourses } = await supabase.from('courses').select('chauffeur_id').gte('date_heure', startOfDay).lt('date_heure', endOfDay).neq('statut', 'annulee');
-    const busyIds = new Set(busyCourses?.map((c) => c.chauffeur_id) || []);
+    const { data: busyCourses } = await supabase.from('courses')
+      .select('chauffeur_id, date_heure, duree_minutes')
+      .gte('date_heure', startOfDay).lt('date_heure', endOfDay)
+      .neq('statut', 'annulee')
+      .or('statut_realisation.is.null,statut_realisation.neq.remplace');
+    const slotStart = new Date(course.date_heure).getTime();
+    const slotEnd = slotStart + (course.duree_minutes || 60) * 60000;
+    const busyIds = new Set(
+      (busyCourses || [])
+        .filter((c) => {
+          const cStart = new Date(c.date_heure).getTime();
+          const cEnd = cStart + (c.duree_minutes || 60) * 60000;
+          return cStart < slotEnd && cEnd > slotStart;
+        })
+        .map((c) => c.chauffeur_id)
+    );
     setAvailableDrivers((allChauffeurs || []).filter((ch) => !busyIds.has(ch.id)) as Chauffeur[]);
   };
 
@@ -113,10 +136,12 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
       arrivee: replacementCourse.arrivee,
       statut: 'planifiee',
       statut_planification: 'non_planifie',
-      statut_realisation: 'en_cours',
-      periode: 'matin',
+      statut_realisation: 'programme',
+      periode: replacementCourse.periode || 'matin',
+      duree_minutes: replacementCourse.duree_minutes || 60,
       user_id: replacementCourse.user_id,
       coordinateur_id: chauffeur.id,
+      notes: '[Remplacement]',
     });
     if (replacementCourse.incident) {
       await supabase.from('incidents').update({ mesure_prise: 'remplacement', coordinateur_id: chauffeur.id, handled_at: new Date().toISOString() }).eq('id', replacementCourse.incident.id);
@@ -140,7 +165,12 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
         </div>
         <div className="flex-1 p-4 space-y-4">
           <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-100 text-red-800">{getIncidentLabel(selectedIncident.type)}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-100 text-red-800">{getIncidentLabel(selectedIncident.type)}</span>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded ${selectedIncident.handled_at ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+                {selectedIncident.handled_at ? 'TRAITE' : 'OUVERT'}
+              </span>
+            </div>
             <p className="text-xs text-gray-500 mt-2">
               {formatTime(selectedIncident.created_at)}
               {selectedIncident.chauffeur && ` - ${selectedIncident.chauffeur.prenom} ${selectedIncident.chauffeur.nom} (${selectedIncident.chauffeur.code})`}

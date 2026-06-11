@@ -235,3 +235,42 @@ Convention : chaque test = précondition → action → **résultat attendu**. P
 4. **Rôles web** : bloquer le signup ouvert ou ajouter un rôle, protéger les pages Paramètres.
 5. ✅ **FAIT (11/06/2026)** — **Facturation** : migration `20260611140000_facturation_integrity.sql` — index unique partiel `(chauffeur_id, mois_reference)` sur `factures` (créé seulement si aucun doublon n'existe déjà, sinon WARNING et nettoyage manuel requis) ; RPC `payer_facture` (paiement atomique : verrou sur la facture, refus si déjà payée, imputation FIFO des avances avec verrous de lignes, passage en « payée » — le tout en une transaction). Côté UI : `FacturationPage` appelle la RPC, affiche un message clair en cas de doublon (code 23505) ou de double paiement, bannière rouge + confirmation si `km_fin < km_début` (dépassement km forcé à 0 au lieu d'un calcul silencieusement faux). Corrige M8, M9 (partie facturation) et I5.
 6. Corriger le matching de plages dans `ChauffeurDetail.tsx` en réutilisant `findPlageForTime` de FacturationPage.
+
+---
+
+## 5. Vérification de cohérence inter-rôles (11/06/2026)
+
+*Trio analysé : **directeur d'exploitation** (back-office web) / **chauffeur** (app Android) / **coordinateur** (app Android, vue dédiée). Chaque flux a été tracé à travers les trois interfaces ; les constats critiques ont été re-vérifiés manuellement dans le code.*
+
+### Matrice de cohérence
+
+| Flux | Verdict | Détail |
+|---|---|---|
+| Course : statuts terminée (chauffeur → dashboard/facturation) | ✅ Cohérent | Le mobile écrit `statut='terminee'` + `statut_realisation='termine'` ; Dashboard et Facturation filtrent sur `statut_realisation` ; le trigger de sync couvre le reste |
+| Course remplacée : exclusion facturation/KPI | ✅ Cohérent | `statut_realisation='remplace'` exclu du filtre `='termine'` |
+| Incidents : médias et traitement | ✅ Cohérent | `photo_url`/`video_url`/`audio_url` lus côté coordinateur et directeur ; « traité » = `handled_at` des deux côtés |
+| Logs d'audit | ✅ Cohérent | header `x-app-source` distingue `admin`/`chauffeur_app` ; le mobile passe `user_id` → trigger d'audit fonctionne |
+| RPC `payer_facture` vs schéma | ✅ Cohérent | `date_avance`, `created_at`, `statut='en_cours'` existent bien |
+| **Brouillon (`is_brouillon`)** | 🔴 **INCOHÉRENT** | Aucun filtre `is_brouillon` dans les requêtes courses du chauffeur ([PlanningPage.tsx:221-236](mobile/src/pages/PlanningPage.tsx:221)) ni du coordinateur — **un brouillon du directeur est visible sur le terrain comme une course publiée**. Idem copie `web/src/mobile` |
+| **Course remplacée : affichage chauffeur** | 🔴 **INCOHÉRENT** | Pas de filtre `statut_realisation != 'remplace'` côté mobile → le chauffeur remplacé voit toujours sa course ; deux chauffeurs voient « la même » course |
+| **Astreintes : deux mondes séparés** | 🔴 **INCOHÉRENT** | Le formulaire astreinte du directeur écrit dans la table `astreintes` ([PlanningPage.tsx:482](web/src/pages/PlanningPage.tsx:482)) que **personne ne lit côté mobile** ; le chauffeur ne voit l'astreinte que si une course avec `courses.is_astreinte=true` existe ([mobile PlanningPage.tsx:253](mobile/src/pages/PlanningPage.tsx:253)). Les sessions réalisées (`astreinte_sessions`) ne remontent ni dans le planning admin ni liées à la planification |
+| **Tarifs km non configurables** | 🟠 Partiel | FacturationPage lit `seuil_km` et `tarif_km_depassement` dans `tarif_frais`, mais TarifsPage n'a **aucune UI** pour ces 2 clés → fallback silencieux à 0 → dépassement km jamais facturé sauf insertion manuelle en base. (`tarif_heure_astreinte`, `forfait_location`, `frais_gestion` sont bien gérés) |
+| **Passagers comptés → rapports** | 🟠 Partiel | Le chauffeur compte les passagers (`arret_executions.montants/descendants`) ; le Dashboard les lit, mais **ReportWizard utilise 40 usagers/trajet codé en dur** et la facturation les ignore. Divergence entre apps : la copie web écrit aussi `courses.passagers_depart/arrivee/nb_passagers`, l'app native non → `nb_passagers` est une colonne fantôme |
+| **Remplacement : directeur ≠ coordinateur** | 🟠 Partiel | Le coordinateur renseigne `coordinateur_id` + lie l'incident (`mesure_prise`, `handled_at`) ; le directeur non (pas de `coordinateur_id`, pas d'incident, notes `[Remplacement]`) → traçabilité asymétrique. Les deux créent la nouvelle course avec `statut_realisation='en_cours'` (devrait être `programme`) → ambiguë pour le dashboard (ni réalisée ni non-effectuée) |
+| **Kilométrage : table morte en priorité** | 🟠 Partiel | FacturationPage lit d'abord `chauffeur_kilometres` (alimentée par personne) puis fallback `kilometrage` (Android, format mois `YYYY-MM`) — fonctionne mais fragile ; à terme supprimer `chauffeur_kilometres` |
+| **Carte GPS / Trafic** | 🟡 Mineur | CarteGPSPage mélange pings de course et d'astreinte sans distinction ; TraficPage ignore totalement les astreintes |
+| **Jour UTC vs jour local** | 🟡 Mineur | Le mobile filtre la « journée » en UTC ([mobile PlanningPage.tsx:213-219](mobile/src/pages/PlanningPage.tsx:213)) alors que l'admin écrit en heure locale (+03/+04 à Mayotte/La Réunion) → une course entre 00h00 et 03h00/04h00 locale apparaît la veille côté chauffeur/coordinateur |
+| UI coordinateur | 🟡 Mineur | Pas de badge « traité/ouvert » explicite sur les incidents ; `description` d'incident toujours vide |
+
+### Correctifs appliqués (11/06/2026) — migration `20260611150000_coherence_astreintes_tarifs.sql`
+
+1. ✅ **Brouillons et courses remplacées masqués sur le terrain** : filtres `is_brouillon` + `statut_realisation != 'remplace'` ajoutés dans les requêtes courses du chauffeur ET du coordinateur (4 fichiers : `mobile/src/pages/PlanningPage.tsx`, `CoordinatorPage.tsx` + copies `web/src/mobile`).
+2. ✅ **Astreintes reliées** : policy anon SELECT sur `astreintes` (non-brouillons) + colonne `astreinte_sessions.astreinte_id` ; le mobile lit désormais les astreintes planifiées par le directeur (en plus de `courses.is_astreinte`) et lie la session démarrée à l'astreinte planifiée.
+3. ✅ **Jour local** : les fenêtres de « journée » mobiles (chauffeur + coordinateur) sont calculées en heure locale, alignées sur le planning admin — plus de décalage pour les courses de 0h-4h.
+4. ✅ **Remplacement harmonisé** : nouvelle course créée avec `statut_realisation='programme'` (directeur + coordinateur), `periode`/`duree_minutes` recopiées, notes `[Remplacement]` ; la disponibilité des chauffeurs est calculée par **chevauchement horaire** (un chauffeur avec une course à 14h reste disponible pour 9h) ; badge TRAITÉ/OUVERT sur le détail incident coordinateur.
+5. ✅ **Passagers réels** : l'app Android native écrit aussi `passagers_depart/arrivee/nb_passagers` sur la course (comme la copie web) ; ReportWizard utilise les comptages réels (repli sur l'estimation 40/trajet pour les courses sans comptage) et le taux de fréquentation après-midi utilise la capacité de l'après-midi (bug corrigé).
+6. ✅ **Tarifs km configurables** : `seuil_km` et `tarif_km_depassement` éditables dans TarifsPage (+ seed en migration) ; la facturation lit en priorité les relevés km Android (`kilometrage`) avant la table legacy `chauffeur_kilometres`.
+7. ✅ **Carte GPS** : pings d'astreinte distingués (marqueur ambre + libellé Course/Astreinte dans l'infobulle).
+8. ✅ **Plages horaires ChauffeurDetail (M1)** : matching en minutes avec gestion des plages traversant minuit (aligné sur FacturationPage).
+
+*Restent ouverts : protection des pages admin par rôle (S3), refonte auth mobile (JWT), regroupement des deux copies mobiles en un seul code partagé.*

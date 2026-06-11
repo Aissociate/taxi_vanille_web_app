@@ -20,6 +20,8 @@ interface CourseWithChauffeur {
   statut_realisation: string | null;
   chauffeur_id: string;
   user_id: string;
+  periode?: string;
+  duree_minutes?: number;
   chauffeur?: Chauffeur;
   ligne?: { id: string; nom: string; code: string; couleur: string; nb_arrets: number };
   incident?: Incident | null;
@@ -64,19 +66,26 @@ export default function CoordinatorPage() {
   const fetchAll = async () => {
     if (!chauffeur) return;
     setLoading(true);
+    // Local-day window, aligned with the back-office planning (local time)
     const today = new Date();
-    const y = today.getUTCFullYear();
-    const m = today.getUTCMonth();
-    const d = today.getUTCDate();
-    const startOfDay = new Date(Date.UTC(y, m, d)).toISOString();
-    const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
-    const endOfTomorrow = new Date(Date.UTC(y, m, d + 2)).toISOString();
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    const d = today.getDate();
+    const startOfDay = new Date(y, m, d).toISOString();
+    const endOfDay = new Date(y, m, d + 1).toISOString();
+    const endOfTomorrow = new Date(y, m, d + 2).toISOString();
 
-    const [coursesRes, incidentsRes, tomorrowRes] = await Promise.all([
+    // Drafts and replaced courses are hidden (the replacement course is shown)
+    const visibleCourses = () =>
       supabase
         .from('courses')
         .select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`)
         .neq('chauffeur_id', chauffeur.id)
+        .or('is_brouillon.is.null,is_brouillon.eq.false')
+        .or('statut_realisation.is.null,statut_realisation.neq.remplace');
+
+    const [coursesRes, incidentsRes, tomorrowRes] = await Promise.all([
+      visibleCourses()
         .gte('date_heure', startOfDay)
         .lt('date_heure', endOfDay)
         .order('date_heure', { ascending: true }),
@@ -85,10 +94,7 @@ export default function CoordinatorPage() {
         .select(`*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS})`)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false }),
-      supabase
-        .from('courses')
-        .select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`)
-        .neq('chauffeur_id', chauffeur.id)
+      visibleCourses()
         .gte('date_heure', endOfDay)
         .lt('date_heure', endOfTomorrow)
         .order('date_heure', { ascending: true }),
@@ -185,13 +191,14 @@ export default function CoordinatorPage() {
   const handleStartReplacement = async (course: CourseWithChauffeur) => {
     setReplacementCourse(course);
     const today = new Date();
-    const y = today.getUTCFullYear();
-    const m = today.getUTCMonth();
-    const d = today.getUTCDate();
-    const startOfDay = new Date(Date.UTC(y, m, d)).toISOString();
-    const endOfDay = new Date(Date.UTC(y, m, d + 1)).toISOString();
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    const d = today.getDate();
+    const startOfDay = new Date(y, m, d).toISOString();
+    const endOfDay = new Date(y, m, d + 1).toISOString();
 
-    // Get all chauffeurs who do NOT have a course at the same time
+    // Get all chauffeurs who do NOT have a course OVERLAPPING the slot to
+    // replace (a driver with a course at 14h is still available for 9h).
     const { data: allChauffeurs } = await supabase
       .from('chauffeurs')
       .select(CHAUFFEUR_PUBLIC_COLS)
@@ -201,12 +208,23 @@ export default function CoordinatorPage() {
 
     const { data: busyCourses } = await supabase
       .from('courses')
-      .select('chauffeur_id')
+      .select('chauffeur_id, date_heure, duree_minutes')
       .gte('date_heure', startOfDay)
       .lt('date_heure', endOfDay)
-      .neq('statut', 'annulee');
+      .neq('statut', 'annulee')
+      .or('statut_realisation.is.null,statut_realisation.neq.remplace');
 
-    const busyIds = new Set(busyCourses?.map((c) => c.chauffeur_id) || []);
+    const slotStart = new Date(course.date_heure).getTime();
+    const slotEnd = slotStart + (course.duree_minutes || 60) * 60000;
+    const busyIds = new Set(
+      (busyCourses || [])
+        .filter((c) => {
+          const cStart = new Date(c.date_heure).getTime();
+          const cEnd = cStart + (c.duree_minutes || 60) * 60000;
+          return cStart < slotEnd && cEnd > slotStart;
+        })
+        .map((c) => c.chauffeur_id)
+    );
     const available = (allChauffeurs || []).filter((ch) => !busyIds.has(ch.id));
     setAvailableDrivers(available as Chauffeur[]);
   };
@@ -232,10 +250,12 @@ export default function CoordinatorPage() {
         arrivee: replacementCourse.arrivee,
         statut: 'planifiee',
         statut_planification: 'non_planifie',
-        statut_realisation: 'en_cours',
-        periode: 'matin',
+        statut_realisation: 'programme',
+        periode: replacementCourse.periode || 'matin',
+        duree_minutes: replacementCourse.duree_minutes || 60,
         user_id: replacementCourse.user_id,
         coordinateur_id: chauffeur.id,
+        notes: '[Remplacement]',
       });
 
     // 3. If there's an incident, mark mesure_prise
@@ -279,7 +299,12 @@ export default function CoordinatorPage() {
 
         <div className="flex-1 p-static-md space-y-static-md">
           <div className="bg-white border border-contrast-low rounded-[8px] p-static-md">
-            <PTag variant="error">{getIncidentLabel(selectedIncident.type)}</PTag>
+            <div className="flex items-center gap-static-xs">
+              <PTag variant="error">{getIncidentLabel(selectedIncident.type)}</PTag>
+              <PTag variant={selectedIncident.handled_at ? 'success' : 'warning'}>
+                {selectedIncident.handled_at ? 'TRAITE' : 'OUVERT'}
+              </PTag>
+            </div>
             <PText size="x-small" color="contrast-medium" className="mt-static-xs">
               {formatTime(selectedIncident.created_at)}
               {selectedIncident.chauffeur && ` - ${selectedIncident.chauffeur.prenom} ${selectedIncident.chauffeur.nom} (${selectedIncident.chauffeur.code})`}

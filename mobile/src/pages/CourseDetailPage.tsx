@@ -180,7 +180,9 @@ export default function CourseDetailPage() {
 
     // Keep legacy `statut` (incl. 'en_retard' for the driver view) AND set the
     // canonical `statut_realisation` the back-office actually reads.
-    const courseUpdate = { statut: courseStatut, statut_realisation: 'en_cours' };
+    // Passenger counts are also mirrored on the course row (same convention as
+    // the web mobile app) so the back-office can read them without joins.
+    const courseUpdate = { statut: courseStatut, statut_realisation: 'en_cours', passagers_depart: passagersDepart };
     const executionData = {
       id: executionId,
       course_id: courseId,
@@ -253,7 +255,12 @@ export default function CourseDetailPage() {
     } : null;
 
     const execUpdate = { statut: 'termine', heure_fin: now.toISOString() };
-    const courseUpdate = { statut: 'terminee', statut_realisation: 'termine' };
+    const courseUpdate = {
+      statut: 'terminee',
+      statut_realisation: 'termine',
+      passagers_arrivee: passagersArrivee,
+      nb_passagers: Math.max(passagersDepart, passagersArrivee),
+    };
 
     if (isOnline()) {
       if (arretArriveeData) {

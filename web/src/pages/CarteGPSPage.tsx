@@ -34,6 +34,8 @@ interface GpsPing {
   latitude: number;
   longitude: number;
   recorded_at: string;
+  course_execution_id: string | null;
+  astreinte_session_id: string | null;
 }
 
 interface CourseActive {
@@ -83,7 +85,7 @@ export function CarteGPSPage() {
   async function loadPings() {
     const { data } = await supabase
       .from('gps_pings')
-      .select('id, chauffeur_id, latitude, longitude, recorded_at')
+      .select('id, chauffeur_id, latitude, longitude, recorded_at, course_execution_id, astreinte_session_id')
       .order('recorded_at', { ascending: false })
       .limit(200);
     if (data) setGpsPings(data);
@@ -197,7 +199,9 @@ export function CarteGPSPage() {
       if (!lastPing) return;
 
       const active = isActive(ch.id);
-      const color = active ? '#10b981' : '#9ca3af';
+      // Astreinte pings are shown in amber to distinguish them from courses
+      const isAstreintePing = !!lastPing.astreinte_session_id;
+      const color = !active ? '#9ca3af' : isAstreintePing ? '#f59e0b' : '#10b981';
 
       const marker = L.circleMarker([lastPing.latitude, lastPing.longitude], {
         radius: 8,
@@ -206,7 +210,8 @@ export function CarteGPSPage() {
         fillOpacity: 0.9,
         weight: 2,
       });
-      marker.bindTooltip(`${ch.code} - ${ch.nom} ${ch.prenom}`, { direction: 'top', offset: [0, -10] });
+      const contexte = isAstreintePing ? 'Astreinte' : lastPing.course_execution_id ? 'Course' : 'Position';
+      marker.bindTooltip(`${ch.code} - ${ch.nom} ${ch.prenom} (${contexte})`, { direction: 'top', offset: [0, -10] });
       markersRef.current!.addLayer(marker);
     });
   }, [gpsPings, chauffeurs]);

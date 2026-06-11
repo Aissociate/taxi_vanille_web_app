@@ -468,6 +468,53 @@ export function TarifsPage({ user }: TarifsPageProps) {
           </div>
         </div>
       </div>
+
+      {/* DEPASSEMENT KILOMETRIQUE */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">Depassement kilometrique mensuel</span>
+          </div>
+
+          <p className="text-sm text-gray-600 mb-4">
+            Au-dela du seuil mensuel, chaque kilometre supplementaire est deduit de la facture de retrocession du chauffeur.
+          </p>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium text-gray-900">Seuil kilometrique mensuel</h4>
+                <p className="text-xs text-gray-500">Kilometres inclus avant facturation du depassement</p>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={getFrais('seuil_km')?.valeur ?? 0}
+                  onChange={(e) => updateFraisLocal('seuil_km', { valeur: parseFloat(e.target.value) || 0, periode: 'mois', actif: true })}
+                  className="w-24 px-2 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none"
+                />
+                <span className="text-xs text-gray-400">km / mois</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium text-gray-900">Tarif du kilometre de depassement</h4>
+                <p className="text-xs text-gray-500">Applique a chaque km au-dela du seuil</p>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={getFrais('tarif_km_depassement')?.valeur ?? 0}
+                  onChange={(e) => updateFraisLocal('tarif_km_depassement', { valeur: parseFloat(e.target.value) || 0, periode: 'km', actif: true })}
+                  className="w-24 px-2 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none"
+                />
+                <span className="text-xs text-gray-400">EUR / km</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

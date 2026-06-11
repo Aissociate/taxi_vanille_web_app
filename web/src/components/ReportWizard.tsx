@@ -24,6 +24,8 @@ interface Course {
   ligne_id: string | null;
   periode: string;
   duree_minutes: number;
+  nb_passagers?: number;
+  passagers_depart?: number;
 }
 
 interface TripRow {
@@ -190,7 +192,7 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
       const matinCourses = dayCourses.filter(c => c.periode === 'matin');
       const soirCourses = dayCourses.filter(c => c.periode === 'apres_midi');
 
-      const buildTrips = (periodCourses: Course[]): TripRow[] => {
+      const buildTrips = (periodCourses: Course[], capacite: number): TripRow[] => {
         const byHour: Record<string, Course[]> = {};
         periodCourses.forEach(c => {
           const h = new Date(c.date_heure).toTimeString().slice(0, 5);
@@ -200,19 +202,24 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
         return Object.entries(byHour)
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([heure, trips]) => {
-            const usagers = trips.length * 40;
+            // Real passenger counts reported by the driver app; fall back to
+            // the historical estimate (40/trip) for courses without counts.
+            const usagers = trips.reduce(
+              (s, c) => s + (c.nb_passagers || c.passagers_depart || 40),
+              0
+            );
             const avgDuree = trips.reduce((s, c) => s + (c.duree_minutes || 0), 0) / trips.length;
             return {
               heure_depart: heure,
               nbre_usagers: usagers,
-              taux_frequentation: capaciteMatin > 0 ? Math.round((usagers / capaciteMatin) * 100) : 0,
+              taux_frequentation: capacite > 0 ? Math.round((usagers / capacite) * 100) : 0,
               temps_moyen: formatMinutes(avgDuree),
             };
           });
       };
 
-      const matinTrips = buildTrips(matinCourses);
-      const soirTrips = buildTrips(soirCourses);
+      const matinTrips = buildTrips(matinCourses, capaciteMatin);
+      const soirTrips = buildTrips(soirCourses, capaciteAprem);
 
       const matinDurees = matinCourses.map(c => c.duree_minutes || 0);
       const soirDurees = soirCourses.map(c => c.duree_minutes || 0);
