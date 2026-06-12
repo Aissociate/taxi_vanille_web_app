@@ -272,7 +272,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
       data.forEach(jf => {
         if (jf.recurrent) {
           const base = jf.date as string;
-          for (let y = 2024; y <= 2028; y++) {
+          const yNow = new Date().getFullYear();
+          for (let y = yNow - 1; y <= yNow + 5; y++) {
             dates.push(`${y}-${base.slice(5)}`);
           }
         } else {
@@ -308,27 +309,51 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return false;
   }
 
+  // Replaced/cancelled courses must not be duplicated: they would resurrect
+  // ghost copies (the replaced original AND its replacement) on every target day.
+  function isDuplicable(c: Course): boolean {
+    return !['remplace', 'annule', 'incident'].includes(c.statut_realisation || '');
+  }
+
   async function handleDuplicate() {
     setDupLoading(true);
     try {
       let sourceCourses: Course[] = [];
       const startDate = new Date(currentDate);
       startDate.setHours(0, 0, 0, 0);
+      const monday = getMonday(currentDate);
 
       if (view === 'jour') {
-        const dayStr = toLocalDateStr(currentDate);
-        sourceCourses = courses.filter(c => c.date_heure.startsWith(dayStr));
+        // Same timezone-aware day matching as the timeline display (Supabase
+        // returns UTC strings: a raw prefix test missed early-morning courses)
+        sourceCourses = courses.filter(c => isDuplicable(c) && isSameDay(parseCourseDate(c.date_heure), currentDate));
       } else {
-        const monday = getMonday(currentDate);
         const sunday = new Date(monday);
         sunday.setDate(sunday.getDate() + 7);
         sourceCourses = courses.filter(c => {
+          if (!isDuplicable(c)) return false;
           const d = parseCourseDate(c.date_heure);
           return d >= monday && d < sunday;
         });
       }
 
       if (sourceCourses.length === 0) { alert('Aucune course a dupliquer'); setDupLoading(false); return; }
+
+      // Guard against accidental double duplication: warn if the target
+      // window already contains courses.
+      const windowStart = new Date(view === 'jour' ? startDate : monday);
+      windowStart.setDate(windowStart.getDate() + (view === 'jour' ? 1 : 7));
+      const windowEnd = new Date(view === 'jour' ? startDate : monday);
+      windowEnd.setDate(windowEnd.getDate() + (view === 'jour' ? dupWeeks * 7 + 1 : (dupWeeks + 1) * 7));
+      const { count: existingCount } = await supabase
+        .from('courses')
+        .select('id', { count: 'exact', head: true })
+        .gte('date_heure', windowStart.toISOString())
+        .lt('date_heure', windowEnd.toISOString());
+      if ((existingCount || 0) > 0 && !confirm(`${existingCount} course(s) existent deja sur la periode cible. Dupliquer quand meme (risque de doublons) ?`)) {
+        setDupLoading(false);
+        return;
+      }
 
       const newCourses: Array<Record<string, unknown>> = [];
 
@@ -337,7 +362,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
           const targetDate = new Date(startDate);
           targetDate.setDate(targetDate.getDate() + dayOffset);
           if (!isDayAllowed(targetDate, joursFeries)) continue;
-          const targetStr = toLocalDateStr(targetDate);
           sourceCourses.forEach(c => {
             const srcDate = parseCourseDate(c.date_heure);
             const dupDate = new Date(targetDate);
@@ -349,6 +373,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
               client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
               periode: c.periode, duree_minutes: c.duree_minutes,
+              is_brouillon: c.is_brouillon || false,
             });
           });
         }
@@ -366,6 +391,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
               client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
               periode: c.periode, duree_minutes: c.duree_minutes,
+              is_brouillon: c.is_brouillon || false,
             });
           });
         }
@@ -373,11 +399,22 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
       if (newCourses.length === 0) { alert('Aucun jour cible ne correspond aux criteres'); setDupLoading(false); return; }
 
+      // Insert batch by batch, stop and report on the first failure so the
+      // user knows exactly how many courses were actually created.
+      let inserted = 0;
       for (let i = 0; i < newCourses.length; i += 100) {
-        await supabase.from('courses').insert(newCourses.slice(i, i + 100));
+        const batch = newCourses.slice(i, i + 100);
+        const { error } = await supabase.from('courses').insert(batch);
+        if (error) {
+          alert(`Erreur lors de la duplication : ${inserted} course(s) creee(s) sur ${newCourses.length} avant l'echec.\n${error.message}`);
+          break;
+        }
+        inserted += batch.length;
       }
 
-      await logAction('duplicate', 'courses', null, `Duplication: ${sourceCourses.length} course(s) sur ${dupWeeks} semaine(s) → ${newCourses.length} course(s) creees`, null, { count: newCourses.length, weeks: dupWeeks });
+      if (inserted > 0) {
+        await logAction('duplicate', 'courses', null, `Duplication: ${sourceCourses.length} course(s) sur ${dupWeeks} semaine(s) → ${inserted} course(s) creees`, null, { count: inserted, weeks: dupWeeks });
+      }
       setShowDuplicate(false);
       loadCourses();
     } finally {
@@ -1134,7 +1171,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 <p className="text-xs text-gray-500">Resume</p>
                 <p className="text-sm font-medium text-gray-800 mt-0.5">
                   {courses.filter(c => {
-                    if (view === 'jour') return c.date_heure.startsWith(toLocalDateStr(currentDate));
+                    if (!isDuplicable(c)) return false;
+                    if (view === 'jour') return isSameDay(parseCourseDate(c.date_heure), currentDate);
                     const mon = getMonday(currentDate);
                     const sun = new Date(mon); sun.setDate(sun.getDate() + 7);
                     const d = parseCourseDate(c.date_heure);
