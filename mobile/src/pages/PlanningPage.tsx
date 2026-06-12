@@ -433,6 +433,7 @@ export default function PlanningPage() {
     return (
       <KilometrageScreen
         chauffeurId={chauffeur!.id}
+        userId={chauffeur!.user_id || null}
         type={kmRequired.type}
         mois={kmRequired.mois}
         onComplete={() => {

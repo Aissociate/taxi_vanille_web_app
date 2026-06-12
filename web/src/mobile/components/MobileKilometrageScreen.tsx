@@ -4,12 +4,13 @@ import { supabase } from '../../lib/supabase';
 
 interface Props {
   chauffeurId: string;
+  userId?: string;
   type: 'debut_mois' | 'fin_mois';
   mois: string;
   onComplete: () => void;
 }
 
-export default function MobileKilometrageScreen({ chauffeurId, type, mois, onComplete }: Props) {
+export default function MobileKilometrageScreen({ chauffeurId, userId, type, mois, onComplete }: Props) {
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -33,6 +34,7 @@ export default function MobileKilometrageScreen({ chauffeurId, type, mois, onCom
       km_value: km,
       type,
       mois,
+      user_id: userId || null,
     });
 
     if (dbError && dbError.code !== '23505') {

@@ -4,12 +4,16 @@ import { supabase } from '../lib/supabase';
 
 interface Props {
   chauffeurId: string;
+  // Auth user id of the back-office owner (chauffeurs.user_id) — used by the
+  // audit trigger to attribute the entry. Null if the chauffeur has no linked
+  // auth user (the audit log is then skipped, never a bogus id).
+  userId: string | null;
   type: 'debut_mois' | 'fin_mois';
   mois: string;
   onComplete: () => void;
 }
 
-export default function KilometrageScreen({ chauffeurId, type, mois, onComplete }: Props) {
+export default function KilometrageScreen({ chauffeurId, userId, type, mois, onComplete }: Props) {
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -39,6 +43,7 @@ export default function KilometrageScreen({ chauffeurId, type, mois, onComplete 
       km_value: km,
       type,
       mois,
+      user_id: userId || null,
     });
 
     if (dbError) {

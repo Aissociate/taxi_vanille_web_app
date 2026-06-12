@@ -274,3 +274,17 @@ Convention : chaque test = précondition → action → **résultat attendu**. P
 8. ✅ **Plages horaires ChauffeurDetail (M1)** : matching en minutes avec gestion des plages traversant minuit (aligné sur FacturationPage).
 
 *Restent ouverts : protection des pages admin par rôle (S3), refonte auth mobile (JWT), regroupement des deux copies mobiles en un seul code partagé.*
+
+---
+
+## 6. Vérification de la traçabilité (logs) — 11/06/2026
+
+**Constat critique corrigé** (migration `20260611170000_fix_audit_trail.sql`) : le correctif sécurité du 21/05 avait passé `audit_log_trigger()` en `SECURITY INVOKER` alors que la table `logs` n'accepte les INSERT que du rôle `authenticated` → toute écriture mobile (anon : exécutions de course, incidents, remplacements coordinateur) échouait sur le trigger ou n'était pas journalisée. La fonction repasse en `SECURITY DEFINER` avec `search_path` fixé (le vrai correctif du lint), EXECUTE toujours révoqué pour les clients, et l'insertion du log devient **best-effort** (un échec de journalisation — ex. user_id absent de auth.users — n'avorte plus l'écriture métier).
+
+**Triggers d'audit ajoutés** : `kilometrage` (saisie km chauffeur — la table morte `chauffeur_kilometres` était auditée mais pas la vraie), `astreintes` (planification directeur), `astreinte_sessions` (sessions chauffeur). Colonne `kilometrage.user_id` ajoutée et transmise par les écrans km (2 copies) pour l'attribution — `null` (log ignoré) plutôt qu'un id factice qui violerait la FK `logs.user_id → auth.users`.
+
+**Couverture par profil après correctif** : directeur ✅ (triggers + logs manuels planning, email + source) ; chauffeur ✅ (courses, exécutions, arrêts, incidents, km, astreintes — source `chauffeur_app`) ; coordinateur ✅ (remplacements, traitements d'incidents).
+
+**Limites connues (non bloquantes)** : connexions non visibles dans LogsPage (logins mobiles dans `login_attempts` uniquement, logins back-office pas tracés) ; uploads storage non tracés ; tables bugs/dev_proposals non auditées ; la policy SELECT de `logs` (`auth.uid() = user_id`) fragmente la vue entre comptes back-office multiples ; `gps_pings` volontairement non audité (volume).
+
+*Nettoyage : doublon `20260611140000_facturation_integrity.sql` supprimé (ré-export Supabase `20260611095439` conservé).*
