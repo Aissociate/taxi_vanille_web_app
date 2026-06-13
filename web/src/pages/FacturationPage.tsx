@@ -354,6 +354,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const [tarifHeureAstreinte, setTarifHeureAstreinte] = useState(facture?.tarif_heure_astreinte || 0);
   const [nbNonPlanifie, setNbNonPlanifie] = useState(0);
   const [tarifNonPlanifie, setTarifNonPlanifie] = useState(0);
+  const [nbSamedisCoord, setNbSamedisCoord] = useState((facture as any)?.nb_samedis_coordinateur || 0);
+  const [forfaitCoordSamedi, setForfaitCoordSamedi] = useState((facture as any)?.forfait_coordinateur_samedi || 200);
+  const [nbDimanchesCoord, setNbDimanchesCoord] = useState((facture as any)?.nb_dimanches_coordinateur || 0);
+  const [forfaitCoordDimanche, setForfaitCoordDimanche] = useState((facture as any)?.forfait_coordinateur_dimanche || 300);
 
   const [locationVehicule, setLocationVehicule] = useState(facture?.location_vehicule || false);
   const [tarifLocation, setTarifLocation] = useState(facture?.tarif_location || 0);
@@ -577,6 +581,8 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const montantAstreinteTrajets = nbAstreinte * tarifAstreinte;
   const montantHeuresAstreinte = nbHeuresAstreinte * tarifHeureAstreinte;
   const montantNonPlanifie = nbNonPlanifie * tarifNonPlanifie;
+  const montantCoordSamedi = nbSamedisCoord * forfaitCoordSamedi;
+  const montantCoordDimanche = nbDimanchesCoord * forfaitCoordDimanche;
   const montantLocation = locationVehicule ? tarifLocation : 0;
   const montantFraisGestion = fraisGestion ? tarifFraisGestion : 0;
   // Coherence check: an end-of-month odometer lower than the start one means a
@@ -587,7 +593,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const montantDepassementKm = kmSurplus * tarifKmDepassement;
   const montantLignesSupp = lignesSupp.reduce((s, l) => s + (l.quantite * l.montant), 0);
 
-  const sousTotal = montantSemaineJour + montantSemaineNuit + montantSamedi + montantDimanche + montantAstreinteTrajets + montantHeuresAstreinte + montantNonPlanifie + montantLignesSupp;
+  const sousTotal = montantSemaineJour + montantSemaineNuit + montantSamedi + montantDimanche + montantAstreinteTrajets + montantHeuresAstreinte + montantNonPlanifie + montantLignesSupp + montantCoordSamedi + montantCoordDimanche;
   const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementAvance;
   const netAPayer = sousTotal - totalDeductions;
 
@@ -626,6 +632,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         tarif_trajet_astreinte: tarifAstreinte,
         nb_heures_astreinte: nbHeuresAstreinte,
         tarif_heure_astreinte: tarifHeureAstreinte,
+        forfait_coordinateur_samedi: forfaitCoordSamedi,
+        forfait_coordinateur_dimanche: forfaitCoordDimanche,
+        nb_samedis_coordinateur: nbSamedisCoord,
+        nb_dimanches_coordinateur: nbDimanchesCoord,
         location_vehicule: locationVehicule,
         tarif_location: tarifLocation,
         frais_gestion: fraisGestion,
@@ -772,6 +782,24 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
                   <input type="number" step="0.01" value={tarifNonPlanifie} onChange={(e) => setTarifNonPlanifie(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-teal-200 rounded-lg text-center text-teal-700 bg-teal-50/50 focus:ring-1 focus:ring-teal-400 outline-none" />
                   <span className="text-right font-bold text-gray-900">{montantNonPlanifie.toFixed(2)} EUR</span>
                 </div>
+
+                {/* Forfait coordinateur */}
+                {selectedChauffeur && chauffeurs.find(c => c.id === chauffeurId)?.code && (
+                  <>
+                    <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm border-t border-gray-100 pt-2">
+                      <span className="text-gray-700 font-medium">Forfait coord. samedi</span>
+                      <input type="number" value={nbSamedisCoord} onChange={(e) => setNbSamedisCoord(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-indigo-200 rounded-lg text-center text-indigo-700 bg-indigo-50/50 focus:ring-1 focus:ring-indigo-400 outline-none" />
+                      <input type="number" step="0.01" value={forfaitCoordSamedi} onChange={(e) => setForfaitCoordSamedi(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-indigo-200 rounded-lg text-center text-indigo-700 bg-indigo-50/50 focus:ring-1 focus:ring-indigo-400 outline-none" />
+                      <span className="text-right font-bold text-gray-900">{montantCoordSamedi.toFixed(2)} EUR</span>
+                    </div>
+                    <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
+                      <span className="text-gray-700 font-medium">Forfait coord. dimanche</span>
+                      <input type="number" value={nbDimanchesCoord} onChange={(e) => setNbDimanchesCoord(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-indigo-200 rounded-lg text-center text-indigo-700 bg-indigo-50/50 focus:ring-1 focus:ring-indigo-400 outline-none" />
+                      <input type="number" step="0.01" value={forfaitCoordDimanche} onChange={(e) => setForfaitCoordDimanche(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-indigo-200 rounded-lg text-center text-indigo-700 bg-indigo-50/50 focus:ring-1 focus:ring-indigo-400 outline-none" />
+                      <span className="text-right font-bold text-gray-900">{montantCoordDimanche.toFixed(2)} EUR</span>
+                    </div>
+                  </>
+                )}
 
                 {/* Header labels */}
                 <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 text-[10px] text-gray-400 uppercase font-semibold border-t border-gray-100 pt-2">

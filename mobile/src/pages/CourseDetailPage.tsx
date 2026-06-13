@@ -450,10 +450,16 @@ export default function CourseDetailPage() {
         <button
           type="button"
           onClick={handleTerminer}
-          className="w-full bg-[#e65c00] text-white py-static-md rounded-[8px] font-bold text-center text-lg"
+          disabled={passagersArrivee === 0}
+          className="w-full bg-[#e65c00] text-white py-static-md rounded-[8px] font-bold text-center text-lg disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           TERMINER LA COURSE
         </button>
+        {passagersArrivee === 0 && (
+          <PText size="xx-small" color="notification-error" align="center" className="mt-static-xs">
+            Saisir le nombre de passagers descendants avant de terminer
+          </PText>
+        )}
       </div>
     </div>
   );

@@ -152,6 +152,11 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     fetchAll();
   };
 
+  const handleConfirmDepart = async (course: CourseWithChauffeur) => {
+    await supabase.from('courses').update({ statut_realisation: 'en_cours', statut: 'en_cours' }).eq('id', course.id);
+    fetchAll();
+  };
+
   if (loading) {
     return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="w-8 h-8 border-4 border-gray-600 border-t-transparent rounded-full animate-spin" /></div>;
   }
@@ -300,6 +305,17 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
                   <button type="button" onClick={() => setSelectedIncident(course.incident as IncidentDetail)} className="flex-1 bg-red-50 border border-red-500 rounded py-2 px-2 flex items-center justify-center gap-1">
                     <Info size={12} className="text-red-600" />
                     <span className="text-[10px] font-semibold text-red-600">{getIncidentLabel(course.incident!.type)}</span>
+                  </button>
+                  <button type="button" onClick={() => handleStartReplacement(course)} className="bg-gray-900 text-white rounded py-2 px-3 flex items-center gap-1">
+                    <RotateCw size={12} />
+                    <span className="text-xs font-semibold">Remplacer</span>
+                  </button>
+                </div>
+              )}
+              {!hasActiveIncident && !isReplaced && course.statut_realisation !== 'termine' && course.statut_realisation !== 'en_cours' && (
+                <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
+                  <button type="button" onClick={() => handleConfirmDepart(course)} className="flex-1 bg-green-50 border border-green-500 rounded py-2 px-2 flex items-center justify-center gap-1">
+                    <span className="text-[10px] font-semibold text-green-700">Confirmer depart</span>
                   </button>
                   <button type="button" onClick={() => handleStartReplacement(course)} className="bg-gray-900 text-white rounded py-2 px-3 flex items-center gap-1">
                     <RotateCw size={12} />

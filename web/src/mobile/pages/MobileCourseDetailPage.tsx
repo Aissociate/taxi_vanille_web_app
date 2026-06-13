@@ -275,7 +275,8 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
         <button type="button" onClick={() => setShowIncident(true)} className="w-full flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-700 py-3 rounded-lg font-semibold text-sm active:bg-red-100">
           <AlertTriangle size={16} /> SIGNALER UN INCIDENT
         </button>
-        <button type="button" onClick={handleTerminer} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700">TERMINER LA COURSE</button>
+        <button type="button" onClick={handleTerminer} disabled={passagersArrivee === 0} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700 disabled:bg-gray-300 disabled:cursor-not-allowed">TERMINER LA COURSE</button>
+        {passagersArrivee === 0 && <p className="text-[10px] text-center text-red-500">Saisir le nombre de passagers descendants avant de terminer</p>}
       </div>
       {showIncident && chauffeur && (
         <MobileIncidentSheet

@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 
 type ViewMode = 'jour' | 'semaine' | 'mois';
@@ -52,6 +52,7 @@ interface Astreinte {
   id: string;
   chauffeur_id: string;
   ligne_id: string;
+  coordinateur_id: string | null;
   date_debut: string;
   date_fin: string;
   is_brouillon: boolean;
@@ -158,6 +159,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [astreinteForm, setAstreinteForm] = useState({
     chauffeur_id: '',
     ligne_id: '',
+    coordinateur_id: '',
     date_debut: '',
     date_fin: '',
     is_brouillon: false,
@@ -229,7 +231,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const { from, to } = getDateRange();
     const { data } = await supabase
       .from('astreintes')
-      .select('id, chauffeur_id, ligne_id, date_debut, date_fin, is_brouillon, notes')
+      .select('id, chauffeur_id, ligne_id, coordinateur_id, date_debut, date_fin, is_brouillon, notes')
       .lte('date_debut', to)
       .gte('date_fin', from);
     if (data) setAstreintes(data);
@@ -422,6 +424,89 @@ export function PlanningPage({ user }: PlanningPageProps) {
     }
   }
 
+  function handleExportCSV() {
+    const rows: string[][] = [['Date', 'Heure', 'Chauffeur', 'Ligne', 'Depart', 'Arrivee', 'Periode', 'Duree (min)', 'Statut planif.', 'Statut real.', 'Montant', 'Notes']];
+    const sorted = [...filteredCourses].sort((a, b) => a.date_heure.localeCompare(b.date_heure));
+    sorted.forEach(c => {
+      const d = parseCourseDate(c.date_heure);
+      const ch = chauffeurs.find(x => x.id === c.chauffeur_id);
+      const li = lignes.find(x => x.id === c.ligne_id);
+      rows.push([
+        toLocalDateStr(d),
+        d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+        ch ? `${ch.code} ${ch.prenom} ${ch.nom}` : '',
+        li ? li.code : '',
+        c.depart,
+        c.arrivee,
+        c.periode || '',
+        String(c.duree_minutes || ''),
+        c.statut_planification || '',
+        c.statut_realisation || '',
+        String(c.montant || 0),
+        (c.notes || '').replace(/"/g, '""'),
+      ]);
+    });
+    const csv = rows.map(r => r.map(cell => `"${cell}"`).join(';')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `planning_${toLocalDateStr(currentDate)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length < 2) { alert('Fichier vide ou invalide'); return; }
+
+    const rows = lines.slice(1).map(line => {
+      const cols = line.split(';').map(c => c.replace(/^"|"$/g, '').trim());
+      return cols;
+    });
+
+    const newCourses: Array<Record<string, unknown>> = [];
+    for (const cols of rows) {
+      if (cols.length < 6) continue;
+      const [date, heure, chauffeurStr, ligneCode, depart, arrivee, periode, duree] = cols;
+      if (!date || !heure) continue;
+
+      const dateHeure = `${date}T${heure}:00${getTimezoneOffsetStr(new Date())}`;
+      const ch = chauffeurs.find(c => chauffeurStr && (c.code === chauffeurStr.trim() || `${c.code} ${c.prenom} ${c.nom}` === chauffeurStr.trim()));
+      const li = lignes.find(l => ligneCode && l.code === ligneCode.trim());
+
+      newCourses.push({
+        date_heure: dateHeure,
+        depart: depart || li?.depart || '',
+        arrivee: arrivee || li?.arrivee || '',
+        chauffeur_id: ch?.id || null,
+        ligne_id: li?.id || null,
+        statut_planification: 'planifie',
+        statut_realisation: 'programme',
+        periode: periode || 'matin',
+        duree_minutes: parseInt(duree) || 60,
+        montant: 0,
+        notes: '',
+        user_id: user.id,
+        is_brouillon: true,
+      });
+    }
+
+    if (newCourses.length === 0) { alert('Aucune course valide trouvee dans le fichier'); return; }
+    if (!confirm(`Importer ${newCourses.length} course(s) en mode brouillon ?`)) return;
+
+    const { error } = await supabase.from('courses').insert(newCourses);
+    if (error) { alert('Erreur import: ' + error.message); return; }
+    alert(`${newCourses.length} course(s) importee(s) en brouillon`);
+    loadCourses();
+    if (importInputRef.current) importInputRef.current.value = '';
+  }
+
   function openCreate(chauffeurId?: string, hour?: number) {
     const d = new Date(currentDate);
     if (hour !== undefined) d.setHours(hour, 0, 0, 0);
@@ -500,32 +585,68 @@ export function PlanningPage({ user }: PlanningPageProps) {
     loadCourses();
   }
 
+  const [editingAstreinte, setEditingAstreinte] = useState<Astreinte | null>(null);
+
   function openAstreinteForm() {
     const dateStr = toLocalDateStr(currentDate);
     setAstreinteForm({
       chauffeur_id: '',
       ligne_id: '',
+      coordinateur_id: '',
       date_debut: `${dateStr}T18:00`,
       date_fin: `${dateStr}T23:59`,
       is_brouillon: draftMode,
       notes: '',
     });
+    setEditingAstreinte(null);
+    setShowAstreinte(true);
+  }
+
+  function openAstreinteEdit(astreinte: Astreinte) {
+    const debut = new Date(astreinte.date_debut);
+    const fin = new Date(astreinte.date_fin);
+    setAstreinteForm({
+      chauffeur_id: astreinte.chauffeur_id,
+      ligne_id: astreinte.ligne_id,
+      coordinateur_id: astreinte.coordinateur_id || '',
+      date_debut: toLocalDateTimeStr(debut),
+      date_fin: toLocalDateTimeStr(fin),
+      is_brouillon: astreinte.is_brouillon,
+      notes: astreinte.notes || '',
+    });
+    setEditingAstreinte(astreinte);
     setShowAstreinte(true);
   }
 
   async function handleAstreinteSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!astreinteForm.chauffeur_id || !astreinteForm.ligne_id) return;
-    await supabase.from('astreintes').insert({
+    const payload = {
       chauffeur_id: astreinteForm.chauffeur_id,
       ligne_id: astreinteForm.ligne_id,
+      coordinateur_id: astreinteForm.coordinateur_id || null,
       date_debut: toLocalDateTimeStrTz(new Date(astreinteForm.date_debut)),
       date_fin: toLocalDateTimeStrTz(new Date(astreinteForm.date_fin)),
       is_brouillon: astreinteForm.is_brouillon,
       notes: astreinteForm.notes,
       user_id: user.id,
-    });
+    };
+    if (editingAstreinte) {
+      await supabase.from('astreintes').update(payload).eq('id', editingAstreinte.id);
+    } else {
+      await supabase.from('astreintes').insert(payload);
+    }
     setShowAstreinte(false);
+    setEditingAstreinte(null);
+    loadAstreintes();
+  }
+
+  async function handleDeleteAstreinte() {
+    if (!editingAstreinte) return;
+    if (!confirm('Supprimer cette astreinte ?')) return;
+    await supabase.from('astreintes').delete().eq('id', editingAstreinte.id);
+    setShowAstreinte(false);
+    setEditingAstreinte(null);
     loadAstreintes();
   }
 
@@ -772,6 +893,13 @@ export function PlanningPage({ user }: PlanningPageProps) {
             <button onClick={() => window.print()} className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5">
               <Printer className="w-3.5 h-3.5" /> Imprimer
             </button>
+            <button onClick={handleExportCSV} className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5">
+              <Download className="w-3.5 h-3.5" /> Exporter
+            </button>
+            <button onClick={() => importInputRef.current?.click()} className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5">
+              <Upload className="w-3.5 h-3.5" /> Importer
+            </button>
+            <input ref={importInputRef} type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
             <button
               onClick={() => setDraftMode(!draftMode)}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border ${draftMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
@@ -964,7 +1092,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
                               return (
                                 <div
                                   key={`astr-${a.id}`}
-                                  className={`absolute top-0 bottom-0 rounded pointer-events-none flex items-center px-2 gap-1 ${a.is_brouillon ? 'border-2 border-dashed border-gray-400' : ''}`}
+                                  onClick={(e) => { e.stopPropagation(); openAstreinteEdit(a); }}
+                                  className={`absolute top-0 bottom-0 rounded cursor-pointer flex items-center px-2 gap-1 hover:ring-2 hover:ring-gray-400 transition-shadow ${a.is_brouillon ? 'border-2 border-dashed border-gray-400' : ''}`}
                                   style={{ left, width, minWidth: '60px', backgroundColor: 'rgba(31, 41, 55, 0.12)' }}
                                 >
                                   <span className="text-[9px] font-bold text-gray-700 truncate">
@@ -1432,7 +1561,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Shield className="w-5 h-5 text-gray-700" />
-                <h3 className="font-semibold text-gray-900">Periode d'astreinte</h3>
+                <h3 className="font-semibold text-gray-900">{editingAstreinte ? 'Modifier l\'astreinte' : 'Periode d\'astreinte'}</h3>
               </div>
               <button onClick={() => setShowAstreinte(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
@@ -1462,6 +1591,19 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   <option value="">-- Selectionner --</option>
                   {lignes.map(l => (
                     <option key={l.id} value={l.id}>{l.code} - {l.nom}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Coordinateur</label>
+                <select
+                  value={astreinteForm.coordinateur_id}
+                  onChange={(e) => setAstreinteForm({ ...astreinteForm, coordinateur_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                >
+                  <option value="">-- Aucun --</option>
+                  {chauffeurs.filter(c => c.is_coordinateur).map(c => (
+                    <option key={c.id} value={c.id}>{c.code} - {c.nom} {c.prenom}</option>
                   ))}
                 </select>
               </div>
@@ -1511,11 +1653,16 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 </button>
               </div>
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowAstreinte(false)} className="flex-1 px-3 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">
+                {editingAstreinte && (
+                  <button type="button" onClick={handleDeleteAstreinte} className="px-3 py-2.5 text-red-600 border border-red-200 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors">
+                    Supprimer
+                  </button>
+                )}
+                <button type="button" onClick={() => { setShowAstreinte(false); setEditingAstreinte(null); }} className="flex-1 px-3 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">
                   Annuler
                 </button>
                 <button type="submit" className="flex-1 px-3 py-2.5 bg-gray-800 hover:bg-gray-900 text-white rounded-xl text-sm font-medium transition-colors">
-                  Definir l'astreinte
+                  {editingAstreinte ? 'Modifier' : 'Definir l\'astreinte'}
                 </button>
               </div>
             </form>

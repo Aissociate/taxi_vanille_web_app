@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { MapPin, Plus, Settings, Trash2, X } from 'lucide-react';
+import { MapPin, Plus, Settings, Trash2, X, Pencil, Check } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 
 interface Ligne {
@@ -47,6 +47,14 @@ export function LignesPage({ user }: LignesPageProps) {
   });
   const [arrets, setArrets] = useState<Arret[]>([]);
   const [newArret, setNewArret] = useState({ nom: '', latitude: -12.788, longitude: 45.227 });
+  const [editingArretId, setEditingArretId] = useState<string | null>(null);
+  const [editingArretData, setEditingArretData] = useState<{ latitude: number; longitude: number }>({ latitude: 0, longitude: 0 });
+
+  async function saveArretGps(arretId: string) {
+    await supabase.from('ligne_arrets').update({ latitude: editingArretData.latitude, longitude: editingArretData.longitude }).eq('id', arretId);
+    setEditingArretId(null);
+    if (selectedLigne) selectLigne(selectedLigne);
+  }
 
   useEffect(() => { loadLignes(); }, []);
 
@@ -269,7 +277,19 @@ export function LignesPage({ user }: LignesPageProps) {
                     <span className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center flex-shrink-0">{a.ordre}</span>
                     <MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                     <span className="text-sm font-medium text-gray-900 flex-1">{a.nom}</span>
-                    <span className="text-xs text-gray-500 font-mono">{a.latitude.toFixed(4)}, {a.longitude.toFixed(4)}</span>
+                    {editingArretId === a.id ? (
+                      <>
+                        <input type="number" step="0.0001" value={editingArretData.latitude} onChange={(e) => setEditingArretData({ ...editingArretData, latitude: parseFloat(e.target.value) || 0 })} className="w-24 px-2 py-1 text-xs border border-gray-300 rounded" />
+                        <input type="number" step="0.0001" value={editingArretData.longitude} onChange={(e) => setEditingArretData({ ...editingArretData, longitude: parseFloat(e.target.value) || 0 })} className="w-24 px-2 py-1 text-xs border border-gray-300 rounded" />
+                        <button type="button" onClick={() => saveArretGps(a.id!)} className="p-1 text-green-600 hover:bg-green-50 rounded"><Check className="w-4 h-4" /></button>
+                        <button type="button" onClick={() => setEditingArretId(null)} className="p-1 text-gray-400 hover:bg-gray-100 rounded"><X className="w-4 h-4" /></button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-xs text-gray-500 font-mono">{a.latitude.toFixed(4)}, {a.longitude.toFixed(4)}</span>
+                        <button type="button" onClick={() => { setEditingArretId(a.id!); setEditingArretData({ latitude: a.latitude, longitude: a.longitude }); }} className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Modifier GPS"><Pencil className="w-3.5 h-3.5" /></button>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

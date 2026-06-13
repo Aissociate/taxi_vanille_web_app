@@ -210,7 +210,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     const { from, to } = getDateRange();
     const { data } = await supabase
       .from('course_executions')
-      .select('id, course_id, statut, heure_debut, heure_fin, created_at')
+      .select('id, course_id, statut, heure_debut, heure_fin, created_at, course:courses!course_executions_course_id_fkey(date_heure, depart, arrivee)')
       .eq('chauffeur_id', chauffeur.id)
       .gte('heure_debut', from)
       .lte('heure_debut', to)
@@ -567,16 +567,29 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
               const fin = e.heure_fin ? new Date(e.heure_fin) : null;
               const dureeMin = fin ? Math.round((fin.getTime() - debut.getTime()) / 60000) : null;
               const isComplete = e.statut === 'termine' || e.statut === 'completed';
+              const courseData = (e as any).course;
+              const theorique = courseData?.date_heure ? new Date(courseData.date_heure) : null;
+              const retardMin = theorique ? Math.round((debut.getTime() - theorique.getTime()) / 60000) : 0;
+              const isLate = retardMin > 10;
+              const isReplacement = courseData?.depart && !theorique;
               return (
                 <div key={e.id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 text-sm">
                   <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isComplete ? 'bg-emerald-500' : e.statut === 'en_cours' ? 'bg-amber-500' : 'bg-gray-300'}`} />
                   <span className="text-gray-900 font-medium w-20">
                     {debut.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
                   </span>
+                  {theorique && (
+                    <span className="text-xs text-gray-400 w-14">
+                      {theorique.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
                   <span className="text-amber-600 font-medium w-28">
                     {debut.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
                     {fin && ` → ${fin.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
                   </span>
+                  {isLate && (
+                    <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">+{retardMin}mn</span>
+                  )}
                   {dureeMin !== null && (
                     <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{dureeMin} mn</span>
                   )}
@@ -613,19 +626,22 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
             <thead>
               <tr className="text-[11px] text-gray-500 uppercase tracking-wide border-b border-gray-100">
                 <th className="text-left py-2 font-semibold">Jour</th>
-                <th className="text-left py-2 font-semibold">Heure</th>
+                <th className="text-left py-2 font-semibold">Heure theorique</th>
                 <th className="text-left py-2 font-semibold">Ligne / Trajet</th>
+                <th className="text-left py-2 font-semibold">Type</th>
                 <th className="text-right py-2 font-semibold">Statut</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {courses.map((c) => {
                 const d = new Date(c.date_heure);
+                const isRemplacement = (c as any).statut_planification === 'non_planifie';
                 return (
                   <tr key={c.id}>
                     <td className="py-2 font-medium text-gray-900">{jourNoms[d.getDay()]}</td>
                     <td className="py-2 text-amber-600 font-medium">{d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</td>
                     <td className="py-2 text-gray-600">{c.depart} → {c.arrivee}</td>
+                    <td className="py-2">{isRemplacement ? <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium">Remplacement</span> : <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-medium">Programme</span>}</td>
                     <td className={`py-2 text-right font-medium ${statutColors[c.statut_realisation] || 'text-gray-500'}`}>{c.statut_realisation}</td>
                   </tr>
                 );
