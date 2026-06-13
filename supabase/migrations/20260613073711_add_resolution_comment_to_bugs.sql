@@ -1,0 +1,1 @@
+ALTER TABLE bugs ADD COLUMN IF NOT EXISTS resolution_comment text;
