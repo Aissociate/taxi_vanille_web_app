@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Edit2, Power, Trash2, Receipt, X, FileText, TrendingUp, Gauge, Clock, Calendar } from 'lucide-react';
+import { Edit2, Power, Trash2, Receipt, X, FileText, TrendingUp, Gauge, Clock, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import type { Chauffeur } from '../../pages/ChauffeursPage';
 
@@ -14,6 +14,7 @@ interface Course {
   statut_realisation: string;
   montant: number;
   periode: string;
+  ligne_id: string | null;
 }
 
 interface TarifPlage {
@@ -21,6 +22,7 @@ interface TarifPlage {
   heure_debut: string;
   heure_fin: string;
   tarif: number;
+  ligne_id: string | null;
 }
 
 interface Document {
@@ -84,6 +86,7 @@ interface ChauffeurDetailProps {
 
 export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, onToggleStatus, onNavigateToPlanning }: ChauffeurDetailProps) {
   const [period, setPeriod] = useState<PeriodFilter>('semaine');
+  const [referenceDate, setReferenceDate] = useState(new Date());
   const [courses, setCourses] = useState<Course[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [avances, setAvances] = useState<Avance[]>([]);
@@ -108,10 +111,10 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
       loadAstreinteSessions(),
       loadCourseExecutions(),
     ]).catch(err => console.error('ChauffeurDetail load error:', err));
-  }, [chauffeur.id, period]);
+  }, [chauffeur.id, period, referenceDate]);
 
   function getDateRange(): { from: string; to: string } {
-    const now = new Date();
+    const now = referenceDate;
     const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
     let from: string;
     switch (period) {
@@ -138,11 +141,42 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     return { from, to };
   }
 
+  function navigatePeriod(direction: number) {
+    const d = new Date(referenceDate);
+    switch (period) {
+      case 'jour': d.setDate(d.getDate() + direction); break;
+      case 'semaine': d.setDate(d.getDate() + (7 * direction)); break;
+      case 'mois': d.setMonth(d.getMonth() + direction); break;
+      case 'annee': d.setFullYear(d.getFullYear() + direction); break;
+    }
+    setReferenceDate(d);
+  }
+
+  function getPeriodLabel(): string {
+    const d = referenceDate;
+    switch (period) {
+      case 'jour':
+        return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+      case 'semaine': {
+        const day = d.getDay() || 7;
+        const mon = new Date(d); mon.setDate(d.getDate() - day + 1);
+        const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+        return `${mon.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })} - ${sun.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+      }
+      case 'mois':
+        return d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+      case 'annee':
+        return String(d.getFullYear());
+      default:
+        return 'Total';
+    }
+  }
+
   async function loadCourses() {
     const { from, to } = getDateRange();
     const { data } = await supabase
       .from('courses')
-      .select('id, date_heure, depart, arrivee, statut_realisation, montant, periode')
+      .select('id, date_heure, depart, arrivee, statut_realisation, montant, periode, ligne_id')
       .eq('chauffeur_id', chauffeur.id)
       .gte('date_heure', from)
       .lte('date_heure', to)
@@ -151,7 +185,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   }
 
   async function loadTarifs() {
-    const { data } = await supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif');
+    const { data } = await supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif, ligne_id');
     if (data) setTarifPlages(data);
   }
 
@@ -268,23 +302,22 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     let typeJour = 'lun_ven';
     if (dow === 6) typeJour = 'samedi';
     else if (dow === 0) typeJour = 'dimanche';
-    // Minutes-based matching with midnight-crossing support (e.g. 21:00-05:00),
-    // same logic as FacturationPage.findPlageForTime — string comparison broke
-    // night plages.
     const toMinutes = (hhmm: string) => {
       const [h, mi] = (hhmm || '00:00').split(':').map(Number);
       return (h || 0) * 60 + (mi || 0);
     };
     const minutes = d.getHours() * 60 + d.getMinutes();
-    const plage = tarifPlages.find(p => {
+    const matchesTime = (p: TarifPlage) => {
       if (p.type_jour !== typeJour) return false;
       const start = toMinutes(p.heure_debut);
       const end = toMinutes(p.heure_fin);
-      return start <= end
-        ? minutes >= start && minutes < end
-        : minutes >= start || minutes < end;
-    });
-    return plage?.tarif || 0;
+      return start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+    };
+    // Prefer ligne-specific tarif, fall back to generic
+    const ligneMatch = tarifPlages.find(p => matchesTime(p) && p.ligne_id === course.ligne_id);
+    const genericMatch = tarifPlages.find(p => matchesTime(p) && !p.ligne_id);
+    const plage = ligneMatch || genericMatch;
+    return parseFloat(String(plage?.tarif ?? 0)) || 0;
   }
 
   const caProjection = coursesTerminees.reduce((sum, c) => sum + getTarifForCourse(c), 0);
@@ -384,11 +417,11 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
       </div>
 
       {/* Period Filter */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         {periods.map((p) => (
           <button
             key={p.id}
-            onClick={() => setPeriod(p.id)}
+            onClick={() => { setPeriod(p.id); setReferenceDate(new Date()); }}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               period === p.id ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
             }`}
@@ -396,6 +429,18 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
             {p.label}
           </button>
         ))}
+        {period !== 'total' && (
+          <div className="flex items-center gap-1 ml-2">
+            <button onClick={() => navigatePeriod(-1)} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-500">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-xs font-medium text-gray-700 min-w-[120px] text-center">{getPeriodLabel()}</span>
+            <button onClick={() => navigatePeriod(1)} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-500">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <button onClick={() => setReferenceDate(new Date())} className="text-[10px] text-amber-600 font-medium hover:underline ml-1">Ajd</button>
+          </div>
+        )}
       </div>
 
       {/* Info card */}
