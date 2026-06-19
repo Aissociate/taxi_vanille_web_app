@@ -49,6 +49,7 @@ export function DashboardPage() {
   const [arretExecs, setArretExecs] = useState<Array<{ id: string; course_execution_id: string; montants: number; descendants: number }>>([]);
   const [showBanner, setShowBanner] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const now = new Date();
 
@@ -86,6 +87,7 @@ export function DashboardPage() {
 
   async function loadData() {
     setLoading(true);
+    setFetchError(null);
     try {
       const [cRes, prevRes, chRes, lRes, incRes, execRes] = await Promise.all([
         supabase.from('courses')
@@ -109,6 +111,11 @@ export function DashboardPage() {
           .lte('heure_debut', periodEnd.toISOString()),
       ]);
 
+      const hasError = [cRes, prevRes, chRes, lRes, incRes, execRes].some(r => r.error);
+      if (hasError) {
+        setFetchError('Erreur de chargement des donnees depuis le serveur.');
+      }
+
       const execData = execRes.data || [];
       const execIds = execData.map(e => e.id);
 
@@ -129,6 +136,7 @@ export function DashboardPage() {
       setArretExecs(arretData);
     } catch (err) {
       console.error('Dashboard load error:', err);
+      setFetchError('Impossible de charger les donnees. Verifiez votre connexion.');
     } finally {
       setLoading(false);
     }
@@ -336,6 +344,14 @@ export function DashboardPage() {
             <span className="w-7 h-7 border-[2.5px] border-gray-900 border-t-transparent rounded-full animate-spin" />
             <span className="text-xs text-gray-400 font-medium">Chargement des donnees...</span>
           </div>
+        </div>
+      ) : fetchError ? (
+        <div className="flex flex-col items-center justify-center py-24 gap-4">
+          <AlertTriangle className="w-10 h-10 text-amber-500" />
+          <p className="text-sm text-gray-600 font-medium">{fetchError}</p>
+          <button onClick={loadData} className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-2">
+            <RefreshCw className="w-4 h-4" /> Reessayer
+          </button>
         </div>
       ) : (
         <div className="space-y-5 animate-fade-in">
