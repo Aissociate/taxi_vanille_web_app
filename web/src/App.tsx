@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, Component, type ReactNode } from 'react';
 import { useAuth } from './hooks/useAuth';
 import { LoginPage } from './components/LoginPage';
 import { Sidebar, type Page } from './components/Sidebar';
@@ -22,6 +22,35 @@ import { DebugAIPage } from './pages/DebugAIPage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { BugReportButton } from './components/BugReportButton';
 import MobileApp from './mobile/MobileApp';
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
+  state = { hasError: false, error: '' };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+          <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center shadow-lg">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <span className="text-red-600 text-xl font-bold">!</span>
+            </div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Erreur de chargement</h2>
+            <p className="text-sm text-gray-500 mb-4">{this.state.error || 'Une erreur inattendue est survenue.'}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+            >
+              Recharger la page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function App() {
   if (window.location.pathname.startsWith('/mobile')) {
@@ -82,4 +111,10 @@ function App() {
   );
 }
 
-export default App;
+export default function AppWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}
