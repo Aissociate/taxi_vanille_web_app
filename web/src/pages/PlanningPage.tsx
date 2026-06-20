@@ -361,8 +361,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
               depart: c.depart, arrivee: c.arrivee,
               statut_planification: 'planifie', statut_realisation: 'programme',
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
+              coordinateur_id: c.coordinateur_id,
               client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
               periode: c.periode, duree_minutes: c.duree_minutes,
+              is_astreinte: c.is_astreinte || false,
               is_brouillon: true,
             });
           });
@@ -385,8 +387,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 depart: c.depart, arrivee: c.arrivee,
                 statut_planification: 'planifie', statut_realisation: 'programme',
                 montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
+                coordinateur_id: c.coordinateur_id,
                 client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
                 periode: c.periode, duree_minutes: c.duree_minutes,
+                is_astreinte: c.is_astreinte || false,
                 is_brouillon: true,
               });
             });
@@ -403,8 +407,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 depart: c.depart, arrivee: c.arrivee,
                 statut_planification: 'planifie', statut_realisation: 'programme',
                 montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
+                coordinateur_id: c.coordinateur_id,
                 client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
                 periode: c.periode, duree_minutes: c.duree_minutes,
+                is_astreinte: c.is_astreinte || false,
                 is_brouillon: true,
               });
             });
@@ -702,7 +708,15 @@ export function PlanningPage({ user }: PlanningPageProps) {
   async function handleDeleteCourse() {
     if (!editingCourse) return;
     if (!confirm('Supprimer cette course ?')) return;
-    await supabase.from('courses').delete().eq('id', editingCourse.id);
+    // On controle le resultat: sans ca, un echec RLS (course appartenant a un
+    // autre compte) renvoyait un succes avec 0 ligne supprimee, la modale se
+    // fermait et la course reapparaissait sans aucun message.
+    const { error, count } = await supabase
+      .from('courses')
+      .delete({ count: 'exact' })
+      .eq('id', editingCourse.id);
+    if (error) { alert(`Suppression impossible : ${error.message}`); return; }
+    if (!count) { alert('Suppression impossible : course introuvable ou droits insuffisants.'); return; }
     const chauffeur = chauffeurs.find(c => c.id === editingCourse.chauffeur_id);
     await logAction('delete', 'courses', editingCourse.id, `Course supprimee: ${editingCourse.depart} → ${editingCourse.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, editingCourse as unknown as Record<string, unknown>, null);
     setShowForm(false);
@@ -819,6 +833,23 @@ export function PlanningPage({ user }: PlanningPageProps) {
   function getCourseForChauffeur(chauffeurId: string, date?: Date): Course[] {
     return filteredCourses.filter(c => {
       if (c.chauffeur_id !== chauffeurId) return false;
+      if (date) return isSameDay(parseCourseDate(c.date_heure), date);
+      return true;
+    });
+  }
+
+  // Courses sans chauffeur affecte: elles n'apparaissent dans aucune colonne
+  // chauffeur (donc invisibles/non supprimables). On applique ligne + periode
+  // mais PAS le filtre chauffeur, pour les garder atteignables et cliquables.
+  const unassignedCoursesBase = useMemo(() => {
+    let result = courses.filter(c => !c.chauffeur_id);
+    if (lineFilter !== 'all') result = result.filter(c => c.ligne_id === lineFilter);
+    if (periodeFilter !== 'all') result = result.filter(c => c.periode === periodeFilter);
+    return result;
+  }, [courses, lineFilter, periodeFilter]);
+
+  function getUnassignedCourses(date?: Date): Course[] {
+    return unassignedCoursesBase.filter(c => {
       if (date) return isSameDay(parseCourseDate(c.date_heure), date);
       return true;
     });
@@ -1136,6 +1167,58 @@ export function PlanningPage({ user }: PlanningPageProps) {
             {filteredChauffeurs.length === 0 && (
               <div className="p-8 text-center text-gray-400 text-sm">Aucun chauffeur pour ce filtre</div>
             )}
+
+            {/* Courses non affectees (sans chauffeur) */}
+            {(() => {
+              const unassigned = getUnassignedCourses(currentDate);
+              if (unassigned.length === 0) return null;
+              return (
+                <div className="border-t-2 border-amber-200">
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border-b border-amber-100">
+                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    <span className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Non affectees</span>
+                    <span className="text-[10px] text-amber-600 ml-auto">{unassigned.length} a assigner</span>
+                  </div>
+                  <div className="flex border-b border-gray-50">
+                    <div className="w-60 flex-shrink-0 px-3 py-2.5 border-r border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-500" />
+                        <span className="text-sm font-semibold text-amber-700">Sans chauffeur</span>
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-0.5 ml-4">Cliquer pour affecter / editer / supprimer</p>
+                    </div>
+                    <div className="flex-1 p-2 flex flex-wrap gap-1.5 content-start">
+                      {unassigned.map(course => {
+                        const ligne = course.ligne_id ? lignes.find(l => l.id === course.ligne_id) : null;
+                        const time = parseCourseDate(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                        const isNonPlanifie = course.statut_planification === 'non_planifie';
+                        const isBrouillon = course.is_brouillon;
+                        return (
+                          <button
+                            key={course.id}
+                            type="button"
+                            data-course-id={course.id}
+                            onClick={() => openEdit(course)}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium text-white cursor-pointer shadow-sm hover:shadow-md transition-shadow border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'}`}
+                            style={{ backgroundColor: isBrouillon ? '#3b82f6' : '#f59e0b' }}
+                          >
+                            <span>{time}</span>
+                            <span className="truncate max-w-[180px]">{course.depart} → {course.arrivee}</span>
+                            {ligne && <span className="bg-white/20 px-1 rounded">{ligne.code}</span>}
+                            <span className="bg-white/20 px-1 rounded">{course.duree_minutes}m</span>
+                            {isNonPlanifie && <span className="bg-white/30 px-1 rounded">Non planifie</span>}
+                            {isBrouillon && <span className="bg-white/30 px-1 rounded">Brouillon</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="w-16 flex-shrink-0 flex items-center justify-center">
+                      <span className="text-[9px] text-amber-600 font-medium">⚠</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1200,6 +1283,48 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 </div>
               );
             })}
+
+            {/* Ligne courses non affectees (sans chauffeur) */}
+            {(() => {
+              const weekUnassigned = unassignedCoursesBase.filter(c => {
+                const d = parseCourseDate(c.date_heure);
+                return weekDays.some(wd => isSameDay(d, wd));
+              });
+              if (weekUnassigned.length === 0) return null;
+              return (
+                <div className="flex border-b border-gray-50 bg-amber-50/30">
+                  <div className="w-52 flex-shrink-0 px-3 py-2 border-r border-gray-100">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      <span className="text-xs font-semibold text-amber-700">Non affectees</span>
+                    </div>
+                    <p className="text-[9px] text-gray-400 mt-0.5">Sans chauffeur</p>
+                  </div>
+                  {weekDays.map(d => {
+                    const dayUnassigned = getUnassignedCourses(d);
+                    return (
+                      <div key={d.toISOString()} className="flex-1 p-1 border-r border-gray-50 min-h-[40px]">
+                        {dayUnassigned.map(c => {
+                          const isNonPlanifie = c.statut_planification === 'non_planifie';
+                          const isBrouillon = c.is_brouillon;
+                          return (
+                            <div
+                              key={c.id}
+                              onClick={(e) => { e.stopPropagation(); openEdit(c); }}
+                              title={isNonPlanifie ? 'Non planifie - sans chauffeur' : 'Sans chauffeur'}
+                              className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'}`}
+                              style={{ backgroundColor: isBrouillon ? '#3b82f6' : '#f59e0b' }}
+                            >
+                              ⚠ {parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.arrivee}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

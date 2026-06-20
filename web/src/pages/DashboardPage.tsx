@@ -189,7 +189,30 @@ export function DashboardPage() {
     return days.map(d => ({ jour: d, montant: map[d] }));
   }, [coursesRealisees]);
 
-  const maxCa = Math.max(...caParJour.map(d => d.montant), 1);
+  // Donnees du graphique CA. En mode "Jour" on decoupe par heure (le titre
+  // annoncait deja "Heures" mais l'agregation restait par jour de semaine).
+  const chartData = useMemo<{ label: string; montant: number }[]>(() => {
+    if (period === 'jour') {
+      const map: Record<number, number> = {};
+      coursesRealisees.forEach(c => {
+        const h = new Date(c.date_heure).getHours();
+        map[h] = (map[h] || 0) + (c.montant || 0);
+      });
+      const heures = Object.keys(map).map(Number);
+      let startH = 6;
+      let endH = 20;
+      if (heures.length > 0) {
+        startH = Math.min(startH, ...heures);
+        endH = Math.max(endH, ...heures);
+      }
+      const arr: { label: string; montant: number }[] = [];
+      for (let h = startH; h <= endH; h++) arr.push({ label: `${h}h`, montant: map[h] || 0 });
+      return arr;
+    }
+    return caParJour.map(d => ({ label: d.jour, montant: d.montant }));
+  }, [period, coursesRealisees, caParJour]);
+
+  const maxCa = Math.max(...chartData.map(d => d.montant), 1);
 
   const nonEffectues30j = useMemo(() => {
     const all = incidents;
@@ -397,30 +420,35 @@ export function DashboardPage() {
                       <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
                     </linearGradient>
                   </defs>
-                  {caParJour.length > 0 && (
-                    <>
-                      <path
-                        d={`M ${caParJour.map((d, i) => `${i * 100 + 50},${180 - (d.montant / maxCa) * 160}`).join(' L ')} L ${(caParJour.length - 1) * 100 + 50},180 L 50,180 Z`}
-                        fill="url(#caGradient)"
-                      />
-                      <polyline
-                        points={caParJour.map((d, i) => `${i * 100 + 50},${180 - (d.montant / maxCa) * 160}`).join(' ')}
-                        fill="none"
-                        stroke="#d97706"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                      {caParJour.map((d, i) => (
-                        <circle key={i} cx={i * 100 + 50} cy={180 - (d.montant / maxCa) * 160} r="3.5" fill="white" stroke="#d97706" strokeWidth="2" />
-                      ))}
-                    </>
-                  )}
+                  {chartData.length > 0 && (() => {
+                    const xAt = (i: number) => chartData.length > 1 ? 50 + (i / (chartData.length - 1)) * 600 : 350;
+                    const yAt = (m: number) => 180 - (m / maxCa) * 160;
+                    const pts = chartData.map((d, i) => `${xAt(i)},${yAt(d.montant)}`);
+                    return (
+                      <>
+                        <path
+                          d={`M ${pts.join(' L ')} L ${xAt(chartData.length - 1)},180 L ${xAt(0)},180 Z`}
+                          fill="url(#caGradient)"
+                        />
+                        <polyline
+                          points={pts.join(' ')}
+                          fill="none"
+                          stroke="#d97706"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        {chartData.map((d, i) => (
+                          <circle key={i} cx={xAt(i)} cy={yAt(d.montant)} r="3.5" fill="white" stroke="#d97706" strokeWidth="2" />
+                        ))}
+                      </>
+                    );
+                  })()}
                 </svg>
               </div>
               <div className="flex justify-between mt-3 px-2">
-                {caParJour.map(d => (
-                  <span key={d.jour} className="text-[11px] text-gray-400 font-medium">{d.jour}</span>
+                {chartData.map((d, i) => (
+                  <span key={i} className="text-[11px] text-gray-400 font-medium">{d.label}</span>
                 ))}
               </div>
             </div>

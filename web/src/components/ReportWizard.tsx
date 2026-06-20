@@ -126,6 +126,25 @@ function getDaysInMonth(year: number, month: number): Date[] {
   return days;
 }
 
+// Cle de date en heure LOCALE (et non UTC). day.toISOString() decalait chaque
+// jour d'un cran a Mayotte (UTC+3), ce qui faisait deborder les courses de fin
+// de mois sur le mois suivant (ex: trajets affiches au 1er juillet en juin).
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Meme logique de parsing que le planning (PlanningPage) pour rester coherent:
+// une chaine avec fuseau est un instant, une chaine naive est lue en local.
+function parseCourseDate(dateStr: string): Date {
+  if (dateStr.endsWith('Z') || dateStr.includes('+')) {
+    return new Date(dateStr);
+  }
+  return new Date(dateStr.replace('T', ' '));
+}
+
 function getWeekNumber(date: Date): number {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
@@ -183,19 +202,19 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
     const feriesMap = Object.fromEntries(joursFeries.map(jf => [jf.date, jf.intitule]));
 
     const result: DayData[] = days.map(day => {
-      const dateStr = day.toISOString().split('T')[0];
+      const dateStr = toLocalDateStr(day);
       const dayLabel = `${DAYS_FR[day.getDay()]} ${day.getDate()} ${MONTHS_FR[day.getMonth()]} ${day.getFullYear()}`;
       const jourSemaine = DAYS_FR[day.getDay()];
       const isFerie = feriesDates.has(dateStr);
 
-      const dayCourses = ligneCourses.filter(c => c.date_heure.startsWith(dateStr));
+      const dayCourses = ligneCourses.filter(c => toLocalDateStr(parseCourseDate(c.date_heure)) === dateStr);
       const matinCourses = dayCourses.filter(c => c.periode === 'matin');
       const soirCourses = dayCourses.filter(c => c.periode === 'apres_midi');
 
       const buildTrips = (periodCourses: Course[], capacite: number): TripRow[] => {
         const byHour: Record<string, Course[]> = {};
         periodCourses.forEach(c => {
-          const h = new Date(c.date_heure).toTimeString().slice(0, 5);
+          const h = parseCourseDate(c.date_heure).toTimeString().slice(0, 5);
           if (!byHour[h]) byHour[h] = [];
           byHour[h].push(c);
         });

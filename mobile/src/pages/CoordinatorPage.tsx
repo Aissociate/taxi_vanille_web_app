@@ -387,7 +387,7 @@ export default function CoordinatorPage() {
           <div className="bg-white border border-contrast-low rounded-[8px] p-static-md mb-static-md">
             <PText size="x-small" weight="semi-bold" color="contrast-medium">COURSE A REMPLACER</PText>
             <PText weight="semi-bold" className="mt-static-xs">
-              {formatTime(replacementCourse.date_heure)} - {replacementCourse.ligne?.nom || replacementCourse.depart}
+              {formatTime(replacementCourse.date_heure)} - {replacementCourse.depart} → {replacementCourse.arrivee}
             </PText>
             <PText size="x-small" color="contrast-medium">
               Chauffeur actuel: {replacementCourse.chauffeur?.prenom} {replacementCourse.chauffeur?.nom} ({replacementCourse.chauffeur?.code})
@@ -507,7 +507,7 @@ export default function CoordinatorPage() {
                   <div>
                     <PText size="large" weight="bold">{formatTime(course.date_heure)}</PText>
                     <PText weight="semi-bold" className="mt-static-xs">
-                      {course.ligne?.nom || course.depart}
+                      {course.depart} → {course.arrivee}
                     </PText>
                     {course.chauffeur && (
                       <div className="flex items-center gap-static-xs mt-static-xs">
@@ -589,7 +589,7 @@ export default function CoordinatorPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-static-sm">
                       <PText size="small" weight="bold">{formatTime(course.date_heure)}</PText>
-                      <PText size="small">{course.ligne?.nom || course.depart || 'Course'}</PText>
+                      <PText size="small">{course.depart} → {course.arrivee}</PText>
                     </div>
                     <PTag variant="info">PROGRAMME</PTag>
                   </div>

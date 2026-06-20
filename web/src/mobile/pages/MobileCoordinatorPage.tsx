@@ -220,7 +220,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
         <div className="p-4">
           <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
             <p className="text-[10px] font-semibold text-gray-400">COURSE A REMPLACER</p>
-            <p className="font-semibold mt-1">{formatTime(replacementCourse.date_heure)} - {replacementCourse.ligne?.nom || replacementCourse.depart}</p>
+            <p className="font-semibold mt-1">{formatTime(replacementCourse.date_heure)} - {replacementCourse.depart} → {replacementCourse.arrivee}</p>
             <p className="text-xs text-gray-500">Chauffeur: {replacementCourse.chauffeur?.prenom} {replacementCourse.chauffeur?.nom} ({replacementCourse.chauffeur?.code})</p>
           </div>
           <p className="text-[10px] font-semibold text-gray-400 mb-2">CHAUFFEURS DISPONIBLES</p>
@@ -288,7 +288,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
               <div className="flex items-start justify-between">
                 <div>
                   <span className="text-lg font-bold">{formatTime(course.date_heure)}</span>
-                  <p className="font-semibold mt-1">{course.ligne?.nom || course.depart}</p>
+                  <p className="font-semibold mt-1">{course.depart} → {course.arrivee}</p>
                   {course.chauffeur && (
                     <div className="flex items-center gap-1 mt-1">
                       <span className="text-xs text-gray-500">{course.chauffeur.prenom} {course.chauffeur.nom} ({course.chauffeur.code})</span>
