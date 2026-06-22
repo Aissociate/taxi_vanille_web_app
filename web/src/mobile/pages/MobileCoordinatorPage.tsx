@@ -50,7 +50,24 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     if (!chauffeur) { onNavigate('/mobile'); return; }
     fetchAll();
     const interval = setInterval(fetchAll, 30000);
-    return () => clearInterval(interval);
+
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => fetchAll(), 600);
+    };
+    const channel = supabase
+      .channel(`coordinator_${chauffeur.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'coordinateur_creneaux' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, scheduleRefresh)
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
+    };
   }, [chauffeur]);
 
   const fetchAll = async () => {

@@ -106,6 +106,7 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       .channel(`planning_${chauffeur.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'astreintes' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'coordinateur_creneaux' }, scheduleRefresh)
       .subscribe();
 
     return () => {
