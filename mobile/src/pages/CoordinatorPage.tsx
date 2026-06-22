@@ -112,12 +112,17 @@ export default function CoordinatorPage() {
 
     const creneaux = creneauxRes.data || [];
     setHasCreneaux(creneaux.length > 0);
-    const inCreneau = (course: { ligne?: { id: string }; date_heure: string }) =>
-      creneaux.some((cr: { ligne_id: string; date_debut: string; date_fin: string }) =>
+    // Une course apparait si sa duree CHEVAUCHE le creneau (meme ligne) :
+    // [debut course, fin course] ∩ [debut creneau, fin creneau] != vide.
+    const inCreneau = (course: { ligne?: { id: string }; date_heure: string; duree_minutes?: number }) => {
+      const cStart = new Date(course.date_heure).getTime();
+      const cEnd = cStart + (course.duree_minutes || 60) * 60000;
+      return creneaux.some((cr: { ligne_id: string; date_debut: string; date_fin: string }) =>
         cr.ligne_id === course.ligne?.id &&
-        new Date(course.date_heure) >= new Date(cr.date_debut) &&
-        new Date(course.date_heure) < new Date(cr.date_fin)
+        cStart < new Date(cr.date_fin).getTime() &&
+        cEnd > new Date(cr.date_debut).getTime()
       );
+    };
 
     if (coursesRes.data) {
       const scoped = (coursesRes.data as CourseWithChauffeur[]).filter(inCreneau);

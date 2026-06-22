@@ -79,12 +79,17 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
 
     const creneaux = creneauxRes.data || [];
     setHasCreneaux(creneaux.length > 0);
-    const inCreneau = (course: any) =>
-      creneaux.some((cr: any) =>
+    // Une course apparait si sa duree CHEVAUCHE le creneau (meme ligne) :
+    // [debut course, fin course] ∩ [debut creneau, fin creneau] != vide.
+    const inCreneau = (course: any) => {
+      const cStart = new Date(course.date_heure).getTime();
+      const cEnd = cStart + (course.duree_minutes || 60) * 60000;
+      return creneaux.some((cr: any) =>
         cr.ligne_id === course.ligne?.id &&
-        new Date(course.date_heure) >= new Date(cr.date_debut) &&
-        new Date(course.date_heure) < new Date(cr.date_fin)
+        cStart < new Date(cr.date_fin).getTime() &&
+        cEnd > new Date(cr.date_debut).getTime()
       );
+    };
 
     if (coursesRes.data) {
       const scoped = coursesRes.data.filter(inCreneau);
