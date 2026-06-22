@@ -94,9 +94,25 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     const handleOffline = () => setIsOffline(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    // Live updates: refresh as soon as the back-office adds, reassigns or
+    // removes a course/astreinte, without closing/reopening the app.
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => fetchCourses(true), 600);
+    };
+    const channel = supabase
+      .channel(`planning_${chauffeur.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'astreintes' }, scheduleRefresh)
+      .subscribe();
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
       stopAstreinteGps();
     };
   }, [chauffeur]);
@@ -114,9 +130,9 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     return () => clearInterval(interval);
   }, [astreinteSession]);
 
-  const fetchCourses = async () => {
+  const fetchCourses = async (background = false) => {
     if (!chauffeur) return;
-    setLoading(true);
+    if (!background) setLoading(true);
     // Local-day window: the back-office plans courses in local time, so the
     // driver's "today" must match the local calendar day, not the UTC one.
     const today = new Date();
@@ -365,8 +381,8 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
                   <div>
                     <span className="text-lg font-bold text-gray-900">{formatTime(course.date_heure)}</span>
                     <div className="mt-1">
-                      <p className="font-semibold text-gray-800">{course.ligne?.nom || course.depart || 'Course'}</p>
-                      <p className="text-xs text-gray-500">{course.ligne ? `${course.ligne.nb_arrets || 0} arrets` : course.arrivee}</p>
+                      <p className="font-semibold text-gray-800">{course.depart || '?'} → {course.arrivee || '?'}</p>
+                      {course.ligne?.nom && <p className="text-xs text-gray-500">{course.ligne.nom}</p>}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
@@ -399,7 +415,7 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
               <div key={course.id} className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-bold">{formatTime(course.date_heure)}</span>
-                  <span className="text-sm">{course.ligne?.nom || course.depart || 'Course'}</span>
+                  <span className="text-sm">{course.depart || '?'} → {course.arrivee || '?'}</span>
                 </div>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-50 text-blue-700">PROGRAMME</span>
               </div>

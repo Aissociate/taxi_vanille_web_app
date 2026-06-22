@@ -117,9 +117,25 @@ export default function PlanningPage() {
     const handleOffline = () => setIsOffline(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    // Live updates: refresh the planning as soon as the back-office adds,
+    // reassigns or removes a course/astreinte, without closing/reopening the app.
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => fetchCourses(true), 600);
+    };
+    const channel = supabase
+      .channel(`planning_${chauffeur.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'astreintes' }, scheduleRefresh)
+      .subscribe();
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
       stopAstreinteGps();
     };
   }, [chauffeur, navigate]);
@@ -207,9 +223,9 @@ export default function PlanningPage() {
     setKmChecked(true);
   };
 
-  const fetchCourses = async () => {
+  const fetchCourses = async (background = false) => {
     if (!chauffeur) return;
-    setLoading(true);
+    if (!background) setLoading(true);
 
     // Local-day window: the back-office plans courses in local time, so the
     // driver's "today" must match the local calendar day, not the UTC one.
@@ -618,13 +634,13 @@ export default function PlanningPage() {
                     </PText>
                     <div className="mt-static-xs">
                       <PText weight="semi-bold">
-                        {course.ligne?.nom || course.depart || 'Course'}
+                        {course.depart || '?'} → {course.arrivee || '?'}
                       </PText>
-                      <PText size="x-small" color="contrast-medium">
-                        {course.ligne
-                          ? `${course.ligne.nb_arrets || 0} arrets`
-                          : course.arrivee}
-                      </PText>
+                      {course.ligne?.nom && (
+                        <PText size="x-small" color="contrast-medium">
+                          {course.ligne.nom}
+                        </PText>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-static-xs">
@@ -670,7 +686,7 @@ export default function PlanningPage() {
                 <div key={course.id} className="bg-white border border-contrast-low rounded-[8px] p-static-sm flex items-center justify-between">
                   <div className="flex items-center gap-static-sm">
                     <PText size="small" weight="bold">{formatTime(course.date_heure)}</PText>
-                    <PText size="small">{course.ligne?.nom || course.depart || 'Course'}</PText>
+                    <PText size="small">{course.depart || '?'} → {course.arrivee || '?'}</PText>
                   </div>
                   <PTag variant="info">PROGRAMME</PTag>
                 </div>

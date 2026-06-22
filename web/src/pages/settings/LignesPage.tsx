@@ -49,6 +49,8 @@ export function LignesPage({ user }: LignesPageProps) {
   const [newArret, setNewArret] = useState({ nom: '', latitude: -12.788, longitude: 45.227 });
   const [editingArretId, setEditingArretId] = useState<string | null>(null);
   const [editingArretData, setEditingArretData] = useState<{ latitude: number; longitude: number }>({ latitude: 0, longitude: 0 });
+  const [editingLigneId, setEditingLigneId] = useState<string | null>(null);
+  const [originalArretIds, setOriginalArretIds] = useState<string[]>([]);
 
   async function saveArretGps(arretId: string) {
     await supabase.from('ligne_arrets').update({ latitude: editingArretData.latitude, longitude: editingArretData.longitude }).eq('id', arretId);
@@ -72,6 +74,25 @@ export function LignesPage({ user }: LignesPageProps) {
   function openCreate() {
     setForm({ code: '', couleur: '#1a1a1a', nom: '', sens_am: '', sens_pm: '', nb_arrets: 0 });
     setArrets([]);
+    setEditingLigneId(null);
+    setOriginalArretIds([]);
+    setShowForm(true);
+  }
+
+  async function openEditLigne(ligne: Ligne) {
+    setForm({
+      code: ligne.code,
+      couleur: ligne.couleur || '#1a1a1a',
+      nom: ligne.nom,
+      sens_am: ligne.sens_am || '',
+      sens_pm: ligne.sens_pm || '',
+      nb_arrets: ligne.nb_arrets,
+    });
+    const { data } = await supabase.from('ligne_arrets').select('*').eq('ligne_id', ligne.id).order('ordre', { ascending: true });
+    const loaded = (data || []) as Arret[];
+    setArrets(loaded);
+    setOriginalArretIds(loaded.map(a => a.id).filter(Boolean) as string[]);
+    setEditingLigneId(ligne.id);
     setShowForm(true);
   }
 
@@ -90,6 +111,44 @@ export function LignesPage({ user }: LignesPageProps) {
     const depart = form.sens_am.replace('→ ', '').trim();
     const arrivee = form.sens_pm.replace('→ ', '').trim();
 
+    // --- Mode EDITION : mettre a jour la ligne et synchroniser ses arrets ---
+    if (editingLigneId) {
+      await supabase.from('lignes').update({
+        code: form.code,
+        nom: form.nom || `${depart} ↔ ${arrivee}`,
+        depart,
+        arrivee,
+        couleur: form.couleur,
+        sens_am: form.sens_am,
+        sens_pm: form.sens_pm,
+        nb_arrets: arrets.length,
+      }).eq('id', editingLigneId);
+
+      // Arrets retires (presents au chargement mais plus dans la liste)
+      const currentIds = arrets.map(a => a.id).filter(Boolean) as string[];
+      const removed = originalArretIds.filter(id => !currentIds.includes(id));
+      if (removed.length > 0) {
+        await supabase.from('arret_executions').delete().in('arret_id', removed);
+        await supabase.from('ligne_arrets').delete().in('id', removed);
+      }
+      // Mise a jour des arrets conserves + insertion des nouveaux (ordre = position)
+      for (let i = 0; i < arrets.length; i++) {
+        const a = arrets[i];
+        if (a.id) {
+          await supabase.from('ligne_arrets').update({ nom: a.nom, latitude: a.latitude, longitude: a.longitude, ordre: i + 1 }).eq('id', a.id);
+        } else {
+          await supabase.from('ligne_arrets').insert({ ligne_id: editingLigneId, nom: a.nom, latitude: a.latitude, longitude: a.longitude, ordre: i + 1, user_id: user.id });
+        }
+      }
+      setShowForm(false);
+      const editedId = editingLigneId;
+      setEditingLigneId(null);
+      loadLignes();
+      if (selectedLigne?.id === editedId) selectLigne({ ...selectedLigne, nb_arrets: arrets.length });
+      return;
+    }
+
+    // --- Mode CREATION ---
     const { data: newLigne } = await supabase.from('lignes').insert({
       code: form.code,
       nom: form.nom || `${depart} ↔ ${arrivee}`,
@@ -195,6 +254,9 @@ export function LignesPage({ user }: LignesPageProps) {
                   <span className="w-2 h-2 bg-emerald-500 rounded-full" />
                   Active
                 </span>
+                <button onClick={(e) => { e.stopPropagation(); openEditLigne(ligne); }} className="px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-amber-50 hover:border-amber-300 transition-colors flex items-center gap-1">
+                  <Pencil className="w-3.5 h-3.5" /> Editer
+                </button>
                 <button onClick={(e) => { e.stopPropagation(); handleToggleActive(ligne.id, ligne.active); }} className="px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
                   Desactiver
                 </button>
@@ -232,6 +294,9 @@ export function LignesPage({ user }: LignesPageProps) {
                   <span className="w-2 h-2 bg-gray-300 rounded-full" />
                   Inactive
                 </span>
+                <button onClick={() => openEditLigne(ligne)} className="px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-amber-50 hover:border-amber-300 transition-colors flex items-center gap-1">
+                  <Pencil className="w-3.5 h-3.5" /> Editer
+                </button>
                 <button onClick={() => handleToggleActive(ligne.id, ligne.active)} className="px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
                   Activer
                 </button>
@@ -305,9 +370,9 @@ export function LignesPage({ user }: LignesPageProps) {
             <div className="p-6 border-b border-gray-100 flex items-center justify-between">
               <div>
                 <p className="text-xs text-gray-500 uppercase tracking-wide">Parametrage · Lignes & Routes</p>
-                <h2 className="text-lg font-bold text-gray-900 mt-0.5">Nouvelle ligne</h2>
+                <h2 className="text-lg font-bold text-gray-900 mt-0.5">{editingLigneId ? 'Modifier la ligne' : 'Nouvelle ligne'}</h2>
               </div>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 p-1">
+              <button onClick={() => { setShowForm(false); setEditingLigneId(null); }} className="text-gray-400 hover:text-gray-600 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -475,11 +540,11 @@ export function LignesPage({ user }: LignesPageProps) {
 
               {/* Buttons */}
               <div className="flex gap-3 pt-4 border-t border-gray-100">
-                <button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors text-sm">
+                <button type="button" onClick={() => { setShowForm(false); setEditingLigneId(null); }} className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors text-sm">
                   Annuler
                 </button>
                 <button type="submit" className="flex-1 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors text-sm">
-                  Creer la ligne →
+                  {editingLigneId ? 'Enregistrer' : 'Creer la ligne →'}
                 </button>
               </div>
             </form>

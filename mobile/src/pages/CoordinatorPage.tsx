@@ -22,6 +22,7 @@ interface CourseWithChauffeur {
   user_id: string;
   periode?: string;
   duree_minutes?: number;
+  confirme_coordinateur_at?: string | null;
   chauffeur?: Chauffeur;
   ligne?: { id: string; nom: string; code: string; couleur: string; nb_arrets: number };
   incident?: Incident | null;
@@ -52,6 +53,7 @@ export default function CoordinatorPage() {
   const [replacementCourse, setReplacementCourse] = useState<CourseWithChauffeur | null>(null);
   const [availableDrivers, setAvailableDrivers] = useState<Chauffeur[]>([]);
   const [replacingDriver, setReplacingDriver] = useState(false);
+  const [hasCreneaux, setHasCreneaux] = useState(false);
 
   useEffect(() => {
     if (!chauffeur) {
@@ -84,7 +86,7 @@ export default function CoordinatorPage() {
         .or('is_brouillon.is.null,is_brouillon.eq.false')
         .or('statut_realisation.is.null,statut_realisation.neq.remplace');
 
-    const [coursesRes, incidentsRes, tomorrowRes] = await Promise.all([
+    const [coursesRes, incidentsRes, tomorrowRes, creneauxRes] = await Promise.all([
       visibleCourses()
         .gte('date_heure', startOfDay)
         .lt('date_heure', endOfDay)
@@ -98,19 +100,44 @@ export default function CoordinatorPage() {
         .gte('date_heure', endOfDay)
         .lt('date_heure', endOfTomorrow)
         .order('date_heure', { ascending: true }),
+      // Le coordinateur ne supervise que les courses de SES creneaux (ligne + plage horaire)
+      supabase
+        .from('coordinateur_creneaux')
+        .select('ligne_id, date_debut, date_fin')
+        .eq('coordinateur_id', chauffeur.id)
+        .or('is_brouillon.is.null,is_brouillon.eq.false')
+        .lte('date_debut', endOfTomorrow)
+        .gte('date_fin', startOfDay),
     ]);
 
+    const creneaux = creneauxRes.data || [];
+    setHasCreneaux(creneaux.length > 0);
+    const inCreneau = (course: { ligne?: { id: string }; date_heure: string }) =>
+      creneaux.some((cr: { ligne_id: string; date_debut: string; date_fin: string }) =>
+        cr.ligne_id === course.ligne?.id &&
+        new Date(course.date_heure) >= new Date(cr.date_debut) &&
+        new Date(course.date_heure) < new Date(cr.date_fin)
+      );
+
     if (coursesRes.data) {
-      const coursesWithIncidents = coursesRes.data.map((course: CourseWithChauffeur) => {
+      const scoped = (coursesRes.data as CourseWithChauffeur[]).filter(inCreneau);
+      const scopedIds = new Set(scoped.map((c) => c.id));
+      const coursesWithIncidents = scoped.map((course: CourseWithChauffeur) => {
         const incident = incidentsRes.data?.find(
           (inc: IncidentDetail) => inc.course_id === course.id
         );
         return { ...course, incident: incident || null };
       });
       setCourses(coursesWithIncidents as CourseWithChauffeur[]);
+      // N'afficher que les incidents rattaches aux courses supervisees
+      setIncidents(((incidentsRes.data || []).filter((inc: IncidentDetail) => scopedIds.has(inc.course_id as string))) as IncidentDetail[]);
+    } else {
+      setCourses([]);
+      setIncidents([]);
     }
-    if (incidentsRes.data) setIncidents(incidentsRes.data as IncidentDetail[]);
-    if (tomorrowRes.data) setTomorrowCourses(tomorrowRes.data as TomorrowCourseCoord[]);
+    if (tomorrowRes.data) {
+      setTomorrowCourses((tomorrowRes.data as TomorrowCourseCoord[]).filter(inCreneau));
+    }
     setLoading(false);
   };
 
@@ -273,6 +300,13 @@ export default function CoordinatorPage() {
     setReplacingDriver(false);
     setReplacementCourse(null);
     setAvailableDrivers([]);
+    fetchAll();
+  };
+
+  const handleConfirmDepart = async (course: CourseWithChauffeur) => {
+    // Non bloquant : on note seulement la confirmation de depart par le
+    // coordinateur. Le statut de la course n'est pas modifie.
+    await supabase.from('courses').update({ confirme_coordinateur_at: new Date().toISOString() }).eq('id', course.id);
     fetchAll();
   };
 
@@ -489,13 +523,20 @@ export default function CoordinatorPage() {
       {/* Courses list */}
       <div className="flex-1 p-static-md space-y-static-sm overflow-y-auto">
         {courses.length === 0 ? (
-          <div className="text-center py-static-xl">
-            <PText color="contrast-medium">Aucune course a superviser aujourd'hui</PText>
+          <div className="text-center py-static-xl px-static-md">
+            <PText color="contrast-medium">
+              {hasCreneaux ? 'Aucune course a superviser dans vos creneaux' : "Aucun creneau de coordination ne vous est attribue aujourd'hui"}
+            </PText>
           </div>
         ) : (
           courses.map((course) => {
             const isReplaced = course.statut_realisation === 'remplace';
             const hasActiveIncident = course.incident && !isReplaced;
+            const isDone = course.statut_realisation === 'termine' || course.statut_realisation === 'terminee';
+            const chauffeurConfirmed = course.statut_realisation === 'en_cours' || isDone;
+            const coordConfirmed = !!course.confirme_coordinateur_at;
+            // En retard : heure passee et aucun depart confirme (ni chauffeur ni coordinateur)
+            const isLate = !isReplaced && !chauffeurConfirmed && !coordConfirmed && new Date(course.date_heure).getTime() < Date.now();
             return (
               <div
                 key={course.id}
@@ -521,13 +562,21 @@ export default function CoordinatorPage() {
                         )}
                       </div>
                     )}
+                    <div className="flex items-center gap-static-xs mt-static-xs">
+                      <PTag variant={chauffeurConfirmed ? 'success' : undefined}>
+                        Chauffeur {chauffeurConfirmed ? '✓' : '—'}
+                      </PTag>
+                      <PTag variant={coordConfirmed ? 'success' : undefined}>
+                        Coord. {coordConfirmed ? '✓' : '—'}
+                      </PTag>
+                    </div>
                   </div>
                   <div className="flex flex-col items-end gap-static-xs">
                     <PTag variant={getPlanificationVariant(course.statut_planification)}>
                       {getPlanificationLabel(course.statut_planification)}
                     </PTag>
-                    <PTag variant={isReplaced ? 'success' : getRealisationVariant(course.statut_realisation)}>
-                      {isReplaced ? 'TERMINE' : getRealisationLabel(course.statut_realisation)}
+                    <PTag variant={isReplaced ? 'success' : isLate ? 'error' : getRealisationVariant(course.statut_realisation)}>
+                      {isReplaced ? 'TERMINE' : isLate ? 'EN RETARD' : getRealisationLabel(course.statut_realisation)}
                     </PTag>
                   </div>
                 </div>
@@ -544,6 +593,32 @@ export default function CoordinatorPage() {
                         {getIncidentLabel(course.incident!.type)}
                       </PText>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => handleStartReplacement(course)}
+                      className="bg-[#1a1a1a] text-white rounded-[4px] py-static-xs px-static-sm flex items-center gap-static-xs"
+                    >
+                      <PIcon name="refresh" size="x-small" color="inherit" />
+                      <span className="text-xs font-semibold">Remplacer</span>
+                    </button>
+                  </div>
+                )}
+
+                {!hasActiveIncident && !isReplaced && !isDone && (
+                  <div className="mt-static-sm pt-static-sm border-t border-contrast-low flex gap-static-sm">
+                    {(chauffeurConfirmed || coordConfirmed) ? (
+                      <div className="flex-1 bg-[#e8f5e9] rounded-[4px] py-static-xs px-static-sm flex items-center justify-center">
+                        <PText size="xx-small" weight="semi-bold" color="notification-success">Depart confirme ✓</PText>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmDepart(course)}
+                        className="flex-1 bg-[#e8f5e9] border border-[#0a8a0a] rounded-[4px] py-static-xs px-static-sm flex items-center justify-center"
+                      >
+                        <PText size="xx-small" weight="semi-bold" color="notification-success">Confirmer depart</PText>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleStartReplacement(course)}

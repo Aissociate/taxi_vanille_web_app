@@ -21,6 +21,7 @@ interface CourseWithChauffeur {
   user_id: string;
   periode?: string;
   duree_minutes?: number;
+  confirme_coordinateur_at?: string | null;
   chauffeur?: Chauffeur;
   ligne?: { id: string; nom: string; code: string; couleur: string; nb_arrets: number };
   incident?: Incident | null;
@@ -43,6 +44,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const [replacementCourse, setReplacementCourse] = useState<CourseWithChauffeur | null>(null);
   const [availableDrivers, setAvailableDrivers] = useState<Chauffeur[]>([]);
   const [replacingDriver, setReplacingDriver] = useState(false);
+  const [hasCreneaux, setHasCreneaux] = useState(false);
 
   useEffect(() => {
     if (!chauffeur) { onNavigate('/mobile'); return; }
@@ -60,7 +62,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     const startOfDay = new Date(y, m, d).toISOString();
     const endOfDay = new Date(y, m, d + 1).toISOString();
 
-    const [coursesRes, incidentsRes] = await Promise.all([
+    const [coursesRes, incidentsRes, creneauxRes] = await Promise.all([
       // Drafts and replaced courses are hidden (the replacement course is shown)
       supabase.from('courses').select(`*, chauffeur:chauffeurs!courses_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS}), ligne:lignes(*)`)
         .neq('chauffeur_id', chauffeur.id)
@@ -68,16 +70,36 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
         .or('statut_realisation.is.null,statut_realisation.neq.remplace')
         .gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
       supabase.from('incidents').select(`*, chauffeur:chauffeurs!incidents_chauffeur_id_fkey(${CHAUFFEUR_PUBLIC_COLS})`).gte('created_at', startOfDay).order('created_at', { ascending: false }),
+      // Le coordinateur ne supervise que les courses de SES creneaux (ligne + plage horaire)
+      supabase.from('coordinateur_creneaux').select('ligne_id, date_debut, date_fin')
+        .eq('coordinateur_id', chauffeur.id)
+        .or('is_brouillon.is.null,is_brouillon.eq.false')
+        .lte('date_debut', endOfDay).gte('date_fin', startOfDay),
     ]);
 
+    const creneaux = creneauxRes.data || [];
+    setHasCreneaux(creneaux.length > 0);
+    const inCreneau = (course: any) =>
+      creneaux.some((cr: any) =>
+        cr.ligne_id === course.ligne?.id &&
+        new Date(course.date_heure) >= new Date(cr.date_debut) &&
+        new Date(course.date_heure) < new Date(cr.date_fin)
+      );
+
     if (coursesRes.data) {
-      const coursesWithIncidents = coursesRes.data.map((course: any) => {
+      const scoped = coursesRes.data.filter(inCreneau);
+      const scopedIds = new Set(scoped.map((c: any) => c.id));
+      const coursesWithIncidents = scoped.map((course: any) => {
         const incident = incidentsRes.data?.find((inc: any) => inc.course_id === course.id);
         return { ...course, incident: incident || null };
       });
       setCourses(coursesWithIncidents as CourseWithChauffeur[]);
+      // N'afficher que les incidents rattaches aux courses supervisees
+      setIncidents(((incidentsRes.data || []).filter((inc: any) => scopedIds.has(inc.course_id))) as IncidentDetail[]);
+    } else {
+      setCourses([]);
+      setIncidents([]);
     }
-    if (incidentsRes.data) setIncidents(incidentsRes.data as IncidentDetail[]);
     setLoading(false);
   };
 
@@ -153,7 +175,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   };
 
   const handleConfirmDepart = async (course: CourseWithChauffeur) => {
-    await supabase.from('courses').update({ statut_realisation: 'en_cours', statut: 'en_cours' }).eq('id', course.id);
+    // Non bloquant : on note seulement que le coordinateur a confirme le depart.
+    // Le statut de la course (et donc le travail du chauffeur) n'est pas modifie.
+    await supabase.from('courses').update({ confirme_coordinateur_at: new Date().toISOString() }).eq('id', course.id);
     fetchAll();
   };
 
@@ -279,12 +303,21 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
 
       <div className="flex-1 p-4 space-y-2 overflow-y-auto">
         {courses.length === 0 ? (
-          <div className="text-center py-12"><p className="text-gray-400">Aucune course a superviser</p></div>
+          <div className="text-center py-12 px-6">
+            <p className="text-gray-400">
+              {hasCreneaux ? 'Aucune course a superviser dans vos creneaux' : "Aucun creneau de coordination ne vous est attribue aujourd'hui"}
+            </p>
+          </div>
         ) : courses.map((course) => {
           const isReplaced = course.statut_realisation === 'remplace';
           const hasActiveIncident = course.incident && !isReplaced;
+          const isDone = course.statut_realisation === 'termine' || course.statut_realisation === 'terminee';
+          const chauffeurConfirmed = course.statut_realisation === 'en_cours' || isDone;
+          const coordConfirmed = !!course.confirme_coordinateur_at;
+          // En retard : heure de depart passee et aucun depart confirme (ni chauffeur ni coordinateur)
+          const isLate = !isReplaced && !chauffeurConfirmed && !coordConfirmed && new Date(course.date_heure).getTime() < Date.now();
           return (
-            <div key={course.id} className={`bg-white border rounded-lg p-4 ${hasActiveIncident ? 'border-red-500 border-l-4' : 'border-gray-200'}`}>
+            <div key={course.id} className={`bg-white border rounded-lg p-4 ${hasActiveIncident ? 'border-red-500 border-l-4' : isLate ? 'border-red-400 border-l-4' : 'border-gray-200'}`}>
               <div className="flex items-start justify-between">
                 <div>
                   <span className="text-lg font-bold">{formatTime(course.date_heure)}</span>
@@ -295,9 +328,17 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
                       {course.chauffeur.telephone && <a href={`tel:${course.chauffeur.telephone}`}><Phone size={10} className="text-blue-600" /></a>}
                     </div>
                   )}
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${chauffeurConfirmed ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}>
+                      Chauffeur {chauffeurConfirmed ? '✓' : '—'}
+                    </span>
+                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${coordConfirmed ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}>
+                      Coord. {coordConfirmed ? '✓' : '—'}
+                    </span>
+                  </div>
                 </div>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${isReplaced ? 'bg-green-100 text-green-800' : getRealisationColor(course.statut_realisation)}`}>
-                  {isReplaced ? 'TERMINE' : getRealisationLabel(course.statut_realisation)}
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${isReplaced ? 'bg-green-100 text-green-800' : isLate ? 'bg-red-100 text-red-700' : getRealisationColor(course.statut_realisation)}`}>
+                  {isReplaced ? 'TERMINE' : isLate ? 'EN RETARD' : getRealisationLabel(course.statut_realisation)}
                 </span>
               </div>
               {hasActiveIncident && (
@@ -312,11 +353,17 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
                   </button>
                 </div>
               )}
-              {!hasActiveIncident && !isReplaced && course.statut_realisation !== 'termine' && course.statut_realisation !== 'en_cours' && (
+              {!hasActiveIncident && !isReplaced && !isDone && (
                 <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
-                  <button type="button" onClick={() => handleConfirmDepart(course)} className="flex-1 bg-green-50 border border-green-500 rounded py-2 px-2 flex items-center justify-center gap-1">
-                    <span className="text-[10px] font-semibold text-green-700">Confirmer depart</span>
-                  </button>
+                  {(chauffeurConfirmed || coordConfirmed) ? (
+                    <span className="flex-1 bg-green-100 rounded py-2 px-2 flex items-center justify-center text-[10px] font-semibold text-green-700">
+                      Depart confirme ✓
+                    </span>
+                  ) : (
+                    <button type="button" onClick={() => handleConfirmDepart(course)} className="flex-1 bg-green-50 border border-green-500 rounded py-2 px-2 flex items-center justify-center gap-1">
+                      <span className="text-[10px] font-semibold text-green-700">Confirmer depart</span>
+                    </button>
+                  )}
                   <button type="button" onClick={() => handleStartReplacement(course)} className="bg-gray-900 text-white rounded py-2 px-3 flex items-center gap-1">
                     <RotateCw size={12} />
                     <span className="text-xs font-semibold">Remplacer</span>

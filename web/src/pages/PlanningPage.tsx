@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 
 type ViewMode = 'jour' | 'semaine' | 'mois';
@@ -53,6 +53,19 @@ interface Astreinte {
   chauffeur_id: string;
   ligne_id: string;
   coordinateur_id: string | null;
+  date_debut: string;
+  date_fin: string;
+  is_brouillon: boolean;
+  notes: string;
+}
+
+// Créneau de coordination : un coordinateur affecté à une ligne sur une plage
+// horaire, indépendamment de tout chauffeur. Sert à filtrer la vue mobile du
+// coordinateur (il ne voit que les courses de ses créneaux : ligne + horaire).
+interface CoordCreneau {
+  id: string;
+  coordinateur_id: string;
+  ligne_id: string;
   date_debut: string;
   date_fin: string;
   is_brouillon: boolean;
@@ -166,9 +179,26 @@ export function PlanningPage({ user }: PlanningPageProps) {
     notes: '',
   });
 
+  // Créneaux de coordination (planning coordinateur indépendant)
+  const [coordCreneaux, setCoordCreneaux] = useState<CoordCreneau[]>([]);
+  const [showCoord, setShowCoord] = useState(false);
+  const [editingCoord, setEditingCoord] = useState<CoordCreneau | null>(null);
+  const [coordForm, setCoordForm] = useState({
+    coordinateur_id: '',
+    ligne_id: '',
+    date_debut: '',
+    date_fin: '',
+    is_brouillon: false,
+    notes: '',
+  });
+
   // Replacement state
   const [showReplace, setShowReplace] = useState(false);
   const [replaceChauffeurId, setReplaceChauffeurId] = useState('');
+
+  // Selection en lot (suppression par cases a cocher)
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedCourseIds, setSelectedCourseIds] = useState<Set<string>>(new Set());
 
   // Resize state
   const [resizingId, setResizingId] = useState<string | null>(null);
@@ -182,7 +212,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       sessionStorage.removeItem('planning_chauffeur_filter');
     }
   }, []);
-  useEffect(() => { loadCourses(); loadAstreintes(); }, [currentDate, view]);
+  useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); }, [currentDate, view]);
 
   async function loadRefs() {
     const [ch, li, cl, ar] = await Promise.all([
@@ -235,6 +265,16 @@ export function PlanningPage({ user }: PlanningPageProps) {
       .lte('date_debut', to)
       .gte('date_fin', from);
     if (data) setAstreintes(data);
+  }
+
+  async function loadCoordCreneaux() {
+    const { from, to } = getDateRange();
+    const { data } = await supabase
+      .from('coordinateur_creneaux')
+      .select('id, coordinateur_id, ligne_id, date_debut, date_fin, is_brouillon, notes')
+      .lte('date_debut', to)
+      .gte('date_fin', from);
+    if (data) setCoordCreneaux(data);
   }
 
   async function logAction(action: string, entite: string, entiteId: string | null, details: string, oldData?: Record<string, unknown> | null, newData?: Record<string, unknown> | null) {
@@ -361,7 +401,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
               depart: c.depart, arrivee: c.arrivee,
               statut_planification: 'planifie', statut_realisation: 'programme',
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
-              coordinateur_id: c.coordinateur_id,
+              coordinateur_id: null, // gere par creneau coordinateur, non recopie a la duplication
               client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
               periode: c.periode, duree_minutes: c.duree_minutes,
               is_astreinte: c.is_astreinte || false,
@@ -387,7 +427,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 depart: c.depart, arrivee: c.arrivee,
                 statut_planification: 'planifie', statut_realisation: 'programme',
                 montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
-                coordinateur_id: c.coordinateur_id,
+                coordinateur_id: null, // gere par creneau coordinateur, non recopie a la duplication
                 client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
                 periode: c.periode, duree_minutes: c.duree_minutes,
                 is_astreinte: c.is_astreinte || false,
@@ -407,7 +447,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 depart: c.depart, arrivee: c.arrivee,
                 statut_planification: 'planifie', statut_realisation: 'programme',
                 montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
-                coordinateur_id: c.coordinateur_id,
+                coordinateur_id: null, // gere par creneau coordinateur, non recopie a la duplication
                 client_id: c.client_id, ligne_id: c.ligne_id, user_id: user.id,
                 periode: c.periode, duree_minutes: c.duree_minutes,
                 is_astreinte: c.is_astreinte || false,
@@ -551,7 +591,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       chauffeur_id: chauffeurId || (last?.chauffeur_id || ''),
       client_id: last?.client_id || '',
       ligne_id: chauffeur?.ligne_id || (last?.ligne_id || ''),
-      coordinateur_id: '',
+      coordinateur_id: last?.coordinateur_id || '',
       periode: (hour !== undefined && hour >= 12) ? 'apres_midi' : (last?.periode || 'matin'),
       duree_minutes: last?.duree_minutes || 60,
       is_astreinte: false,
@@ -673,6 +713,64 @@ export function PlanningPage({ user }: PlanningPageProps) {
     loadAstreintes();
   }
 
+  function openCoordForm() {
+    const dateStr = toLocalDateStr(currentDate);
+    setCoordForm({
+      coordinateur_id: '',
+      ligne_id: '',
+      date_debut: `${dateStr}T06:00`,
+      date_fin: `${dateStr}T12:00`,
+      is_brouillon: draftMode,
+      notes: '',
+    });
+    setEditingCoord(null);
+    setShowCoord(true);
+  }
+
+  function openCoordEdit(creneau: CoordCreneau) {
+    setCoordForm({
+      coordinateur_id: creneau.coordinateur_id,
+      ligne_id: creneau.ligne_id,
+      date_debut: toLocalDateTimeStr(new Date(creneau.date_debut)),
+      date_fin: toLocalDateTimeStr(new Date(creneau.date_fin)),
+      is_brouillon: creneau.is_brouillon,
+      notes: creneau.notes || '',
+    });
+    setEditingCoord(creneau);
+    setShowCoord(true);
+  }
+
+  async function handleCoordSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!coordForm.coordinateur_id || !coordForm.ligne_id) return;
+    const payload = {
+      coordinateur_id: coordForm.coordinateur_id,
+      ligne_id: coordForm.ligne_id,
+      date_debut: toLocalDateTimeStrTz(new Date(coordForm.date_debut)),
+      date_fin: toLocalDateTimeStrTz(new Date(coordForm.date_fin)),
+      is_brouillon: coordForm.is_brouillon,
+      notes: coordForm.notes,
+      user_id: user.id,
+    };
+    if (editingCoord) {
+      await supabase.from('coordinateur_creneaux').update(payload).eq('id', editingCoord.id);
+    } else {
+      await supabase.from('coordinateur_creneaux').insert(payload);
+    }
+    setShowCoord(false);
+    setEditingCoord(null);
+    loadCoordCreneaux();
+  }
+
+  async function handleDeleteCoord() {
+    if (!editingCoord) return;
+    if (!confirm('Supprimer ce creneau de coordination ?')) return;
+    await supabase.from('coordinateur_creneaux').delete().eq('id', editingCoord.id);
+    setShowCoord(false);
+    setEditingCoord(null);
+    loadCoordCreneaux();
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const formDate = new Date(form.date_heure);
@@ -697,6 +795,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
         chauffeur_id: form.chauffeur_id,
         client_id: form.client_id,
         ligne_id: form.ligne_id,
+        coordinateur_id: form.coordinateur_id,
         periode: form.periode,
         duree_minutes: form.duree_minutes,
       }));
@@ -720,6 +819,33 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const chauffeur = chauffeurs.find(c => c.id === editingCourse.chauffeur_id);
     await logAction('delete', 'courses', editingCourse.id, `Course supprimee: ${editingCourse.depart} → ${editingCourse.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, editingCourse as unknown as Record<string, unknown>, null);
     setShowForm(false);
+    loadCourses();
+  }
+
+  function toggleCourseSelection(id: string) {
+    setSelectedCourseIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  // Clic sur une course : en mode selection on coche/decoche, sinon on edite.
+  function onCourseClick(c: Course) {
+    if (selectMode) toggleCourseSelection(c.id);
+    else openEdit(c);
+  }
+
+  async function handleBatchDelete() {
+    if (selectedCourseIds.size === 0) return;
+    if (!confirm(`Supprimer definitivement ${selectedCourseIds.size} course(s) ?`)) return;
+    const ids = Array.from(selectedCourseIds);
+    const { error, count } = await supabase.from('courses').delete({ count: 'exact' }).in('id', ids);
+    if (error) { alert('Suppression impossible : ' + error.message); return; }
+    if (!count) { alert('Aucune course supprimee (droits insuffisants ?).'); return; }
+    await logAction('delete', 'courses', null, `Suppression en lot: ${count} course(s)`, null, { ids });
+    setSelectedCourseIds(new Set());
+    setSelectMode(false);
     loadCourses();
   }
 
@@ -962,9 +1088,20 @@ export function PlanningPage({ user }: PlanningPageProps) {
             <button onClick={openAstreinteForm} className="px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-900 text-white rounded-lg transition-colors flex items-center gap-1.5">
               <Shield className="w-3.5 h-3.5" /> Astreinte
             </button>
+            <button onClick={openCoordForm} className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-1.5">
+              <UserCheck className="w-3.5 h-3.5" /> Coordinateur
+            </button>
             <button onClick={() => openCreate()} className="px-4 py-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors flex items-center gap-1.5">
               <Plus className="w-3.5 h-3.5" /> Course
             </button>
+            <button onClick={() => { setSelectMode(!selectMode); setSelectedCourseIds(new Set()); }} className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border ${selectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
+              <CheckSquare className="w-3.5 h-3.5" /> {selectMode ? 'Quitter' : 'Selection'}
+            </button>
+            {selectMode && selectedCourseIds.size > 0 && (
+              <button onClick={handleBatchDelete} className="px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-1.5">
+                <Trash2 className="w-3.5 h-3.5" /> Supprimer ({selectedCourseIds.size})
+              </button>
+            )}
           </div>
         </div>
 
@@ -1075,7 +1212,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                         </div>
                         <div
                           className="flex-1 relative min-h-[52px] cursor-pointer"
-                          onClick={() => openCreate(ch.id)}
+                          onClick={() => { if (!selectMode) openCreate(ch.id); }}
                           data-timeline-container={ch.id}
                         >
                           <div className="absolute inset-0 flex pointer-events-none">
@@ -1094,12 +1231,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
                               <div
                                 key={course.id}
                                 data-course-id={course.id}
-                                onClick={(e) => { e.stopPropagation(); openEdit(course); }}
-                                className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''}`}
+                                onClick={(e) => { e.stopPropagation(); onCourseClick(course); }}
+                                className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
                                 style={{ left: pos.left, width: pos.width, minWidth: '80px', backgroundColor: bgColor }}
                               >
                                 <span className={`truncate flex-1 ${isRemplacee ? 'line-through' : ''}`}>
-                                  {isBrouillon ? '✎' : isRemplacee ? '⟳' : '▶'} {course.arrivee} · {time}
+                                  {isBrouillon ? '✎' : isRemplacee ? '⟳' : '▶'} {course.depart} → {course.arrivee} · {time}
                                 </span>
                                 <span className="bg-white/20 px-1 rounded text-[9px] flex-shrink-0">{course.duree_minutes}m</span>
                                 {isBrouillon && (
@@ -1152,6 +1289,35 @@ export function PlanningPage({ user }: PlanningPageProps) {
                                 </div>
                               );
                             })}
+                          {/* Creneaux de coordination (bande indigo en haut de la ligne) */}
+                          {coordCreneaux
+                            .filter(cc => cc.coordinateur_id === ch.id)
+                            .map(cc => {
+                              const cStart = new Date(cc.date_debut);
+                              const cEnd = new Date(cc.date_fin);
+                              const dayStart = new Date(currentDate);
+                              dayStart.setHours(START_HOUR, 0, 0, 0);
+                              const startH = Math.max(0, (cStart.getTime() - dayStart.getTime()) / 3600000);
+                              const endH = Math.min(TOTAL_HOURS, (cEnd.getTime() - dayStart.getTime()) / 3600000);
+                              if (endH <= 0 || startH >= TOTAL_HOURS) return null;
+                              const left = `${(Math.max(0, startH) / TOTAL_HOURS) * 100}%`;
+                              const width = `${((Math.min(TOTAL_HOURS, endH) - Math.max(0, startH)) / TOTAL_HOURS) * 100}%`;
+                              const ccLigne = lignes.find(l => l.id === cc.ligne_id);
+                              return (
+                                <div
+                                  key={`coord-${cc.id}`}
+                                  onClick={(e) => { e.stopPropagation(); openCoordEdit(cc); }}
+                                  title={`Coordination ${ccLigne ? ccLigne.code : ''}`}
+                                  className={`absolute top-0 h-[14px] rounded-b cursor-pointer flex items-center px-1.5 gap-1 z-10 hover:ring-2 hover:ring-indigo-400 transition-shadow ${cc.is_brouillon ? 'border border-dashed border-indigo-300 opacity-80' : ''}`}
+                                  style={{ left, width, minWidth: '50px', backgroundColor: 'rgba(79, 70, 229, 0.9)' }}
+                                >
+                                  <UserCheck className="w-2.5 h-2.5 text-white flex-shrink-0" />
+                                  <span className="text-[8px] font-bold text-white truncate">
+                                    {ccLigne ? ccLigne.code : 'Coord.'}
+                                  </span>
+                                </div>
+                              );
+                            })}
                         </div>
                         <div className="w-16 flex-shrink-0 flex items-center justify-center">
                           {chCourses.some(c => c.statut_planification === 'non_planifie') && (
@@ -1198,8 +1364,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             key={course.id}
                             type="button"
                             data-course-id={course.id}
-                            onClick={() => openEdit(course)}
-                            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium text-white cursor-pointer shadow-sm hover:shadow-md transition-shadow border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'}`}
+                            onClick={() => onCourseClick(course)}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium text-white cursor-pointer shadow-sm hover:shadow-md transition-shadow border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
                             style={{ backgroundColor: isBrouillon ? '#3b82f6' : '#f59e0b' }}
                           >
                             <span>{time}</span>
@@ -1258,7 +1424,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                       return a.chauffeur_id === ch.id && aStart <= dayEnd && aEnd >= d;
                     });
                     return (
-                      <div key={d.toISOString()} className={`flex-1 p-1 border-r border-gray-50 min-h-[40px] cursor-pointer ${isSameDay(d, new Date()) ? 'bg-amber-50/50' : ''}`} onClick={() => { setCurrentDate(d); openCreate(ch.id); }}>
+                      <div key={d.toISOString()} className={`flex-1 p-1 border-r border-gray-50 min-h-[40px] cursor-pointer ${isSameDay(d, new Date()) ? 'bg-amber-50/50' : ''}`} onClick={() => { if (!selectMode) { setCurrentDate(d); openCreate(ch.id); } }}>
                         {dayAstreintes.map(a => {
                           const aLigne = lignes.find(l => l.id === a.ligne_id);
                           return (
@@ -1267,13 +1433,28 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             </div>
                           );
                         })}
+                        {coordCreneaux
+                          .filter(cc => {
+                            const cStart = new Date(cc.date_debut);
+                            const cEnd = new Date(cc.date_fin);
+                            const dayEnd = new Date(d); dayEnd.setHours(23, 59, 59, 999);
+                            return cc.coordinateur_id === ch.id && cStart <= dayEnd && cEnd >= d;
+                          })
+                          .map(cc => {
+                            const ccLigne = lignes.find(l => l.id === cc.ligne_id);
+                            return (
+                              <div key={`coord-${cc.id}`} onClick={(e) => { e.stopPropagation(); openCoordEdit(cc); }} className={`text-[8px] px-1 py-0.5 rounded mb-0.5 bg-indigo-600 text-white truncate cursor-pointer ${cc.is_brouillon ? 'border border-dashed border-indigo-300 opacity-70' : ''}`}>
+                                Coord. {ccLigne?.code || ''}
+                              </div>
+                            );
+                          })}
                         {dayCourses.map(c => {
                           const isNonPlanifie = c.statut_planification === 'non_planifie';
                           const isRemplacee = c.statut_realisation === 'remplace';
                           const isBrouillon = c.is_brouillon;
                           return (
-                            <div key={c.id} onClick={(e) => { e.stopPropagation(); openEdit(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.arrivee}
+                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
+                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.depart} → {c.arrivee}
                             </div>
                           );
                         })}
@@ -1310,12 +1491,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           return (
                             <div
                               key={c.id}
-                              onClick={(e) => { e.stopPropagation(); openEdit(c); }}
+                              onClick={(e) => { e.stopPropagation(); onCourseClick(c); }}
                               title={isNonPlanifie ? 'Non planifie - sans chauffeur' : 'Sans chauffeur'}
-                              className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'}`}
+                              className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`}
                               style={{ backgroundColor: isBrouillon ? '#3b82f6' : '#f59e0b' }}
                             >
-                              ⚠ {parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.arrivee}
+                              ⚠ {parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} {c.depart} → {c.arrivee}
                             </div>
                           );
                         })}
@@ -1683,11 +1864,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   {arretOptions.map(p => <option key={p} value={p} />)}
                 </datalist>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Montant (EUR)</label>
-                  <input type="number" step="0.01" value={form.montant} onChange={(e) => setForm({ ...form, montant: parseFloat(e.target.value) || 0 })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
-                </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Planification</label>
                   <select value={form.statut_planification} onChange={(e) => setForm({ ...form, statut_planification: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none">
@@ -1843,6 +2020,115 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 </button>
                 <button type="submit" className="flex-1 px-3 py-2.5 bg-gray-800 hover:bg-gray-900 text-white rounded-xl text-sm font-medium transition-colors">
                   {editingAstreinte ? 'Modifier' : 'Definir l\'astreinte'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Coordinateur Creneau Modal */}
+      {showCoord && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-semibold text-gray-900">{editingCoord ? 'Modifier le creneau' : 'Creneau de coordination'}</h3>
+              </div>
+              <button onClick={() => { setShowCoord(false); setEditingCoord(null); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleCoordSubmit} className="p-5 space-y-4">
+              <p className="text-[11px] text-gray-500 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+                Le coordinateur verra sur son mobile <span className="font-semibold">uniquement les courses de cette ligne</span> qui tombent dans cette plage horaire.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Coordinateur</label>
+                <select
+                  value={coordForm.coordinateur_id}
+                  onChange={(e) => setCoordForm({ ...coordForm, coordinateur_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  required
+                >
+                  <option value="">-- Selectionner --</option>
+                  {chauffeurs.filter(c => c.is_coordinateur).map(c => (
+                    <option key={c.id} value={c.id}>{c.code} - {c.nom} {c.prenom}</option>
+                  ))}
+                </select>
+                {chauffeurs.filter(c => c.is_coordinateur).length === 0 && (
+                  <p className="text-[10px] text-amber-600 mt-1">Aucun chauffeur marque comme coordinateur (fiche chauffeur).</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Ligne supervisee</label>
+                <select
+                  value={coordForm.ligne_id}
+                  onChange={(e) => setCoordForm({ ...coordForm, ligne_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  required
+                >
+                  <option value="">-- Selectionner --</option>
+                  {lignes.map(l => (
+                    <option key={l.id} value={l.id}>{l.code} - {l.nom}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Debut</label>
+                  <input
+                    type="datetime-local"
+                    value={coordForm.date_debut}
+                    onChange={(e) => setCoordForm({ ...coordForm, date_debut: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Fin</label>
+                  <input
+                    type="datetime-local"
+                    value={coordForm.date_fin}
+                    onChange={(e) => setCoordForm({ ...coordForm, date_fin: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Notes</label>
+                <textarea
+                  value={coordForm.notes}
+                  onChange={(e) => setCoordForm({ ...coordForm, notes: e.target.value })}
+                  rows={2}
+                  placeholder="Ex: Coordination matin ligne 3..."
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                />
+              </div>
+              <div className="flex items-center justify-between py-2 px-1">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Brouillon</label>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Non publie, invisible pour le coordinateur</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCoordForm({ ...coordForm, is_brouillon: !coordForm.is_brouillon })}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${coordForm.is_brouillon ? 'bg-blue-600' : 'bg-gray-200'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${coordForm.is_brouillon ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+              <div className="flex gap-3 pt-2">
+                {editingCoord && (
+                  <button type="button" onClick={handleDeleteCoord} className="px-3 py-2.5 text-red-600 border border-red-200 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors">
+                    Supprimer
+                  </button>
+                )}
+                <button type="button" onClick={() => { setShowCoord(false); setEditingCoord(null); }} className="flex-1 px-3 py-2.5 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">
+                  Annuler
+                </button>
+                <button type="submit" className="flex-1 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors">
+                  {editingCoord ? 'Modifier' : 'Definir le creneau'}
                 </button>
               </div>
             </form>
