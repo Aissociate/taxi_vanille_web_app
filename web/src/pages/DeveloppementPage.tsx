@@ -12,7 +12,8 @@ interface BugRecord {
   user_id: string;
   titre: string;
   description: string;
-  screenshot_data: string;
+  screenshot_data?: string;
+  has_screenshot?: boolean;
   statut: string;
   priorite: string;
   created_at: string;
@@ -112,21 +113,38 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
 
   async function loadAll(showLoader = false) {
     if (showLoader) setLoading(true);
-    const [bRes, rRes, pRes, vRes, prRes, upRes] = await Promise.all([
-      supabase.from('bugs').select('*').order('created_at', { ascending: false }),
+    const [bRes, rRes, pRes, vRes, prRes, upRes, ssRes] = await Promise.all([
+      supabase.from('bugs').select('id, user_id, titre, description, statut, priorite, created_at, updated_at, resolution_comment').order('created_at', { ascending: false }),
       supabase.from('bug_responses').select('*').order('created_at', { ascending: true }),
       supabase.from('dev_proposals').select('*').order('created_at', { ascending: false }),
       supabase.from('proposal_votes').select('*'),
       supabase.from('proposal_responses').select('*').order('created_at', { ascending: true }),
       supabase.from('user_profiles').select('id, email'),
+      supabase.from('bugs').select('id').not('screenshot_data', 'is', null).neq('screenshot_data', ''),
     ]);
-    if (bRes.data) setBugs(bRes.data);
-    if (rRes.data) setResponses(rRes.data);
-    if (pRes.data) setProposals(pRes.data);
-    if (vRes.data) setVotes(vRes.data);
-    if (prRes.data) setProposalResponses(prRes.data);
-    if (upRes.data) setUserProfiles(upRes.data);
+    if (bRes.error) console.error('[DeveloppementPage] bugs query error:', bRes.error);
+    if (rRes.error) console.error('[DeveloppementPage] bug_responses query error:', rRes.error);
+    if (upRes.error) console.error('[DeveloppementPage] user_profiles query error:', upRes.error);
+    const screenshotIds = new Set((ssRes.data ?? []).map((r: { id: string }) => r.id));
+    setBugs((bRes.data ?? []).map((b: BugRecord) => ({ ...b, has_screenshot: screenshotIds.has(b.id) })));
+    setResponses(rRes.data ?? []);
+    setProposals(pRes.data ?? []);
+    setVotes(vRes.data ?? []);
+    setProposalResponses(prRes.data ?? []);
+    setUserProfiles(upRes.data ?? []);
     setLoading(false);
+  }
+
+  async function loadScreenshot(bugId: string) {
+    const { data } = await supabase
+      .from('bugs')
+      .select('screenshot_data')
+      .eq('id', bugId)
+      .single();
+    if (data?.screenshot_data) {
+      setBugs(prev => prev.map(b => b.id === bugId ? { ...b, screenshot_data: data.screenshot_data } : b));
+      setScreenshotModal(data.screenshot_data);
+    }
   }
 
   function getUserEmail(userId: string): string {
@@ -273,9 +291,9 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                       {bug.description && <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{bug.description}</p>}
                     </div>
                     <div className="flex items-center gap-3">
-                      {bug.screenshot_data && (
+                      {bug.has_screenshot && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); setScreenshotModal(bug.screenshot_data); }}
+                          onClick={(e) => { e.stopPropagation(); if (bug.screenshot_data) { setScreenshotModal(bug.screenshot_data); } else { loadScreenshot(bug.id); } }}
                           className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                           title="Voir la capture"
                         >
@@ -294,14 +312,23 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
 
                 {isExpanded && (
                   <div className="border-t border-gray-100">
-                    {bug.screenshot_data && (
+                    {bug.has_screenshot && (
                       <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
-                        <img
-                          src={bug.screenshot_data}
-                          alt="Screenshot"
-                          className="max-h-64 rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() => setScreenshotModal(bug.screenshot_data)}
-                        />
+                        {bug.screenshot_data ? (
+                          <img
+                            src={bug.screenshot_data}
+                            alt="Screenshot"
+                            className="max-h-64 rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
+                            onClick={() => setScreenshotModal(bug.screenshot_data!)}
+                          />
+                        ) : (
+                          <button
+                            onClick={() => loadScreenshot(bug.id)}
+                            className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            Charger la capture...
+                          </button>
+                        )}
                       </div>
                     )}
 
