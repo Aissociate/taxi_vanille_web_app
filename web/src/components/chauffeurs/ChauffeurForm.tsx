@@ -32,6 +32,7 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
     vehicule_carburant: chauffeur?.vehicule_carburant || '',
     vehicule_date_controle_technique: chauffeur?.vehicule_date_controle_technique || '',
     vehicule_assureur: chauffeur?.vehicule_assureur || '',
+    vehicule_type_lien: chauffeur?.vehicule_type_lien || '',
     numero_permis: chauffeur?.numero_permis || '',
     n_adherent: chauffeur?.n_adherent || '',
     secteur_activite: chauffeur?.secteur_activite || '',
@@ -234,6 +235,16 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Assureur</label>
                 <input type="text" value={form.vehicule_assureur} onChange={(e) => setForm({ ...form, vehicule_assureur: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" placeholder="Nom de l'assurance" />
               </div>
+            </div>
+            <div className="mt-3">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Lien avec le vehicule</label>
+              <select value={form.vehicule_type_lien} onChange={(e) => setForm({ ...form, vehicule_type_lien: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none">
+                <option value="">--</option>
+                <option value="proprietaire">Proprietaire</option>
+                <option value="locataire">Locataire</option>
+                <option value="credit_bail">Locataire Credit-Bail</option>
+                <option value="loue_tv">Loue a Taxi Vanille</option>
+              </select>
             </div>
           </div>
 

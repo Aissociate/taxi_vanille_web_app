@@ -454,12 +454,15 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
             {chauffeur.vehicule_carburant && <p className="text-gray-500">{chauffeur.vehicule_carburant}</p>}
           </div>
         )}
-        {(chauffeur.vehicule_date_1ere_immat || chauffeur.vehicule_date_controle_technique || chauffeur.vehicule_assureur) && (
+        {(chauffeur.vehicule_date_1ere_immat || chauffeur.vehicule_date_controle_technique || chauffeur.vehicule_assureur || chauffeur.vehicule_type_lien) && (
           <div>
             <p className="text-gray-400 uppercase font-semibold">Vehicule (suite)</p>
             {chauffeur.vehicule_date_1ere_immat && <p className="text-gray-500 mt-0.5">1ere immat: {chauffeur.vehicule_date_1ere_immat}</p>}
             {chauffeur.vehicule_date_controle_technique && <p className="text-gray-500">CT: {chauffeur.vehicule_date_controle_technique}</p>}
             {chauffeur.vehicule_assureur && <p className="text-gray-500">Assureur: {chauffeur.vehicule_assureur}</p>}
+            {chauffeur.vehicule_type_lien && (
+              <p className="text-gray-500">Lien: {({ proprietaire: 'Proprietaire', locataire: 'Locataire', credit_bail: 'Credit-Bail', loue_tv: 'Loue a TV' } as Record<string, string>)[chauffeur.vehicule_type_lien] || chauffeur.vehicule_type_lien}</p>
+            )}
           </div>
         )}
         {chauffeur.licence_transport && (

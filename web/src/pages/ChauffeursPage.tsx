@@ -50,6 +50,7 @@ export interface Chauffeur {
   vehicule_carburant: string;
   vehicule_date_controle_technique: string;
   vehicule_assureur: string;
+  vehicule_type_lien?: string | null;
   ligne_id: string | null;
   pin: string;
   is_coordinateur: boolean;
