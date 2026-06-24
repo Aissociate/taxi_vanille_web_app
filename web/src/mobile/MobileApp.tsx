@@ -4,9 +4,13 @@ import MobilePlanningPage from './pages/MobilePlanningPage';
 import MobileCourseDetailPage from './pages/MobileCourseDetailPage';
 import MobileCoordinatorPage from './pages/MobileCoordinatorPage';
 import { initOfflineSync } from './lib/offlineQueue';
+import { useKeepAwake } from './lib/useKeepAwake';
 
 export default function MobileApp() {
   const [path, setPath] = useState(window.location.pathname);
+
+  // Empeche la mise en veille de l'ecran tant que l'app chauffeur/coordinateur est ouverte
+  useKeepAwake();
 
   useEffect(() => {
     initOfflineSync();

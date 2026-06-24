@@ -6,8 +6,12 @@ import CourseDetailPage from './pages/CourseDetailPage';
 import CoordinatorPage from './pages/CoordinatorPage';
 import OfflineBanner from './components/OfflineBanner';
 import { initOfflineSync } from './lib/offlineQueue';
+import { useKeepAwake } from './lib/useKeepAwake';
 
 export default function App() {
+  // Empeche la mise en veille de l'ecran tant que l'app chauffeur/coordinateur est ouverte
+  useKeepAwake();
+
   useEffect(() => {
     initOfflineSync();
   }, []);
