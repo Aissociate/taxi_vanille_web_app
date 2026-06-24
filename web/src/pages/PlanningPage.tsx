@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 
-type ViewMode = 'jour' | 'semaine' | 'mois';
+type ViewMode = 'jour' | 'semaine' | 'mois' | 'liste';
 type PeriodeFilter = 'all' | 'matin' | 'apres_midi' | 'astreinte';
 
 interface Course {
@@ -231,7 +231,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const d = new Date(currentDate);
     d.setHours(0, 0, 0, 0);
     let from: Date, to: Date;
-    if (view === 'jour') {
+    if (view === 'jour' || view === 'liste') {
       from = new Date(d);
       to = new Date(d);
       to.setDate(to.getDate() + 1);
@@ -292,7 +292,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   function navigate(dir: number) {
     const d = new Date(currentDate);
-    if (view === 'jour') d.setDate(d.getDate() + dir);
+    if (view === 'jour' || view === 'liste') d.setDate(d.getDate() + dir);
     else if (view === 'semaine') d.setDate(d.getDate() + dir * 7);
     else d.setMonth(d.getMonth() + dir);
     setCurrentDate(d);
@@ -1011,7 +1011,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return days;
   }, [currentDate]);
 
-  const headerTitle = view === 'jour'
+  const headerTitle = (view === 'jour' || view === 'liste')
     ? formatDateFr(currentDate)
     : view === 'semaine'
       ? `Sem. du ${formatDateFr(getMonday(currentDate))}`
@@ -1049,15 +1049,15 @@ export function PlanningPage({ user }: PlanningPageProps) {
               <button onClick={() => navigate(1)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"><ChevronRight className="w-4 h-4" /></button>
             </div>
             <div>
-              <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Planning {view === 'jour' ? 'Journee' : view === 'semaine' ? 'Semaine' : 'Mois'}</p>
+              <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Planning {view === 'jour' ? 'Journee' : view === 'semaine' ? 'Semaine' : view === 'mois' ? 'Mois' : 'Liste'}</p>
               <h1 className="text-lg font-bold text-gray-900">{headerTitle}</h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex border border-gray-200 rounded-lg overflow-hidden">
-              {(['jour', 'semaine', 'mois'] as ViewMode[]).map(v => (
+              {(['jour', 'semaine', 'mois', 'liste'] as ViewMode[]).map(v => (
                 <button key={v} onClick={() => setView(v)} className={`px-3 py-1.5 text-xs font-medium transition-colors ${view === v ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                  {v === 'jour' ? 'Jour' : v === 'semaine' ? 'Semaine' : 'Mois'}
+                  {v === 'jour' ? 'Jour' : v === 'semaine' ? 'Semaine' : v === 'mois' ? 'Mois' : 'Liste'}
                 </button>
               ))}
             </div>
@@ -1545,6 +1545,67 @@ export function PlanningPage({ user }: PlanningPageProps) {
         </div>
       )}
 
+      {/* List View */}
+      {view === 'liste' && (() => {
+        const jour = [...filteredCourses]
+          .filter(c => isSameDay(parseCourseDate(c.date_heure), currentDate))
+          .sort((a, b) => a.date_heure.localeCompare(b.date_heure));
+        const statutBadge = (c: Course) => {
+          const s = c.is_brouillon ? 'brouillon' : (c.statut_realisation || 'programme');
+          const map: Record<string, [string, string]> = {
+            brouillon: ['Brouillon', 'bg-blue-100 text-blue-700'],
+            programme: ['Programme', 'bg-gray-100 text-gray-600'],
+            en_cours: ['En cours', 'bg-green-100 text-green-700'],
+            termine: ['Termine', 'bg-green-100 text-green-700'],
+            terminee: ['Termine', 'bg-green-100 text-green-700'],
+            en_retard: ['En retard', 'bg-yellow-100 text-yellow-700'],
+            remplace: ['Remplace', 'bg-red-100 text-red-700'],
+            annule: ['Annule', 'bg-red-100 text-red-700'],
+          };
+          const [lab, cls] = map[s] || [s, 'bg-gray-100 text-gray-600'];
+          return <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${cls}`}>{lab}</span>;
+        };
+        return (
+          <div className="px-6 pb-6">
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200 text-[10px] uppercase text-gray-500">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold">Heure</th>
+                    <th className="text-left px-3 py-2 font-semibold">Chauffeur</th>
+                    <th className="text-left px-3 py-2 font-semibold">Ligne</th>
+                    <th className="text-left px-3 py-2 font-semibold">Trajet</th>
+                    <th className="text-left px-3 py-2 font-semibold">Periode</th>
+                    <th className="text-left px-3 py-2 font-semibold">Statut</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {jour.map(course => {
+                    const ch = chauffeurs.find(x => x.id === course.chauffeur_id);
+                    const li = course.ligne_id ? lignes.find(x => x.id === course.ligne_id) : null;
+                    const selected = selectMode && selectedCourseIds.has(course.id);
+                    return (
+                      <tr key={course.id} onClick={() => onCourseClick(course)} className={`cursor-pointer transition-colors ${selected ? 'bg-blue-50' : 'hover:bg-amber-50/40'}`}>
+                        <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{parseCourseDate(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{ch ? `${ch.code} ${ch.nom} ${ch.prenom}` : <span className="text-amber-600 font-medium">Non affecte</span>}</td>
+                        <td className="px-3 py-2">{li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}</td>
+                        <td className="px-3 py-2 text-gray-700">{course.depart} → {course.arrivee}</td>
+                        <td className="px-3 py-2 text-gray-500">{periodeLabels[course.periode] || course.periode}</td>
+                        <td className="px-3 py-2">{statutBadge(course)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {jour.length === 0 && (
+                <div className="p-8 text-center text-gray-400 text-sm">Aucune course ce jour</div>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-400 mt-2">{jour.length} course(s) · {formatDateFr(currentDate)}</p>
+          </div>
+        );
+      })()}
+
       {/* Duplication Modal */}
       {showDuplicate && (() => {
         const duplicable = getDuplicableCourses();
@@ -1854,15 +1915,18 @@ export function PlanningPage({ user }: PlanningPageProps) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Depart</label>
-                  <input type="text" list="course-arret-options" value={form.depart} onChange={(e) => setForm({ ...form, depart: e.target.value })} placeholder={arretOptions.length ? 'Selectionner ou saisir...' : ''} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" required />
+                  <select value={form.depart} onChange={(e) => setForm({ ...form, depart: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white" required>
+                    <option value="">{arretOptions.length ? '-- Arret de depart --' : '(choisir une ligne)'}</option>
+                    {[...new Set([form.depart, ...arretOptions].filter(Boolean))].map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Arrivee</label>
-                  <input type="text" list="course-arret-options" value={form.arrivee} onChange={(e) => setForm({ ...form, arrivee: e.target.value })} placeholder={arretOptions.length ? 'Selectionner ou saisir...' : ''} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" required />
+                  <select value={form.arrivee} onChange={(e) => setForm({ ...form, arrivee: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white" required>
+                    <option value="">{arretOptions.length ? '-- Arret d arrivee --' : '(choisir une ligne)'}</option>
+                    {[...new Set([form.arrivee, ...arretOptions].filter(Boolean))].map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
                 </div>
-                <datalist id="course-arret-options">
-                  {arretOptions.map(p => <option key={p} value={p} />)}
-                </datalist>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
