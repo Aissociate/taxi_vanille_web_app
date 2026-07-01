@@ -244,7 +244,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
       from = new Date(d.getFullYear(), d.getMonth(), 1);
       to = new Date(d.getFullYear(), d.getMonth() + 1, 1);
     }
-    return { from: toLocalDateStr(from) + 'T00:00:00', to: toLocalDateStr(to) + 'T00:00:00' };
+    // from/to sont des minuits LOCAUX : on renvoie l'instant exact (toISOString)
+    // et non une chaine locale naive que Postgres interpretait en UTC -> les
+    // courses de 00:00-03:00 (Mayotte UTC+3) tombaient dans le mauvais jour/semaine.
+    return { from: from.toISOString(), to: to.toISOString() };
   }
 
   async function loadCourses() {
@@ -292,10 +295,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function navigate(dir: number) {
-    const d = new Date(currentDate);
+    let d = new Date(currentDate);
     if (view === 'jour' || view === 'liste') d.setDate(d.getDate() + dir);
     else if (view === 'semaine') d.setDate(d.getDate() + dir * 7);
-    else d.setMonth(d.getMonth() + dir);
+    // Mois : passer par le 1er du mois cible, sinon partir d'un 31 saute un mois.
+    else d = new Date(d.getFullYear(), d.getMonth() + dir, 1);
     setCurrentDate(d);
   }
 
@@ -430,7 +434,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setDupLoading(true);
     let skippedDup = 0;
     try {
-      const sourceCourses = getDuplicableCourses().filter(c => dupSelectedIds.has(c.id));
+      // On respecte le filtre chauffeur de la modale : sans ca, des courses
+      // cochees mais masquees (autres chauffeurs) etaient dupliquees a l'insu.
+      const sourceCourses = getDuplicableCourses().filter(c => dupSelectedIds.has(c.id) && (!dupChauffeurFilter || c.chauffeur_id === dupChauffeurFilter));
       const sourceAstreintes = dupIncludeAstreintes ? getDuplicableAstreintes() : [];
       const sourceCreneaux = dupIncludeCreneaux ? getDuplicableCreneaux() : [];
 
@@ -461,9 +467,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
         const sameDow = (srcStr: string, target: Date) => parseCourseDate(srcStr).getDay() === target.getDay();
         dupTargetDates.forEach(targetDateStr => {
           const targetDate = new Date(targetDateStr + 'T00:00:00');
-          const courseSrc = view === 'semaine' ? sourceCourses.filter(c => sameDow(c.date_heure, targetDate)) : sourceCourses;
-          const astrSrc = view === 'semaine' ? sourceAstreintes.filter(a => sameDow(a.date_debut, targetDate)) : sourceAstreintes;
-          const crenSrc = view === 'semaine' ? sourceCreneaux.filter(cc => sameDow(cc.date_debut, targetDate)) : sourceCreneaux;
+          const courseSrc = view !== 'jour' ? sourceCourses.filter(c => sameDow(c.date_heure, targetDate)) : sourceCourses;
+          const astrSrc = view !== 'jour' ? sourceAstreintes.filter(a => sameDow(a.date_debut, targetDate)) : sourceAstreintes;
+          const crenSrc = view !== 'jour' ? sourceCreneaux.filter(cc => sameDow(cc.date_debut, targetDate)) : sourceCreneaux;
           courseSrc.forEach(c => {
             const srcDate = parseCourseDate(c.date_heure);
             const dupDate = new Date(targetDate);
@@ -924,11 +930,14 @@ export function PlanningPage({ user }: PlanningPageProps) {
       user_id: user.id,
     };
     if (editingCourse) {
-      await supabase.from('courses').update(payload).eq('id', editingCourse.id);
+      const { error, count } = await supabase.from('courses').update(payload, { count: 'exact' }).eq('id', editingCourse.id);
+      if (error) { alert(`Enregistrement impossible : ${error.message}`); return; }
+      if (!count) { alert('Enregistrement impossible : course introuvable ou droits insuffisants.'); return; }
       const chauffeur = chauffeurs.find(c => c.id === form.chauffeur_id);
       await logAction('update', 'courses', editingCourse.id, `Course modifiee: ${form.depart} → ${form.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, editingCourse as unknown as Record<string, unknown>, payload);
     } else {
-      const { data } = await supabase.from('courses').insert(payload).select('id').maybeSingle();
+      const { data, error } = await supabase.from('courses').insert(payload).select('id').maybeSingle();
+      if (error) { alert(`Creation impossible : ${error.message}`); return; }
       const chauffeur = chauffeurs.find(c => c.id === form.chauffeur_id);
       await logAction('create', 'courses', data?.id || null, `Course creee: ${form.depart} → ${form.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, null, payload);
       localStorage.setItem('planning_last_course', JSON.stringify({
@@ -993,10 +1002,19 @@ export function PlanningPage({ user }: PlanningPageProps) {
     if (!editingCourse || !replaceChauffeurId) return;
     const oldChauffeur = chauffeurs.find(c => c.id === editingCourse.chauffeur_id);
     const newChauffeur = chauffeurs.find(c => c.id === replaceChauffeurId);
-    // Mark original course as remplacee
-    await supabase.from('courses').update({ statut_realisation: 'remplace' }).eq('id', editingCourse.id);
-    // Duplicate course onto the new chauffeur with non_planifie status
-    await supabase.from('courses').insert({
+    // On marque l'originale remplacee de facon CONDITIONNELLE et controlee : si
+    // l'update echoue (0 ligne / RLS), on n'insere PAS le remplacant (sinon deux
+    // courses actives au meme horaire, les deux chauffeurs se presentent).
+    const { error: updErr, count: updCount } = await supabase
+      .from('courses')
+      .update({ statut_realisation: 'remplace' }, { count: 'exact' })
+      .eq('id', editingCourse.id)
+      .neq('statut_realisation', 'remplace');
+    if (updErr) { alert(`Remplacement impossible : ${updErr.message}`); return; }
+    if (!updCount) { alert('Remplacement impossible : course deja remplacee, introuvable ou droits insuffisants.'); return; }
+    // Duplicate course onto the new chauffeur ; on recopie is_brouillon / is_astreinte
+    // (remplacer un brouillon ne doit pas publier immediatement une course).
+    const { error: insErr } = await supabase.from('courses').insert({
       date_heure: editingCourse.date_heure,
       depart: editingCourse.depart,
       arrivee: editingCourse.arrivee,
@@ -1009,8 +1027,16 @@ export function PlanningPage({ user }: PlanningPageProps) {
       ligne_id: editingCourse.ligne_id,
       periode: editingCourse.periode,
       duree_minutes: editingCourse.duree_minutes,
+      is_brouillon: editingCourse.is_brouillon || false,
+      is_astreinte: editingCourse.is_astreinte || false,
       user_id: user.id,
     });
+    if (insErr) {
+      // On tente de revenir en arriere pour ne pas laisser une course "fantome".
+      await supabase.from('courses').update({ statut_realisation: 'programme' }).eq('id', editingCourse.id);
+      alert(`Remplacement impossible (creation du remplacant) : ${insErr.message}`);
+      return;
+    }
     await logAction('replace', 'courses', editingCourse.id, `Remplacement: ${oldChauffeur ? `${oldChauffeur.prenom} ${oldChauffeur.nom}` : '?'} → ${newChauffeur ? `${newChauffeur.prenom} ${newChauffeur.nom}` : '?'} (${editingCourse.depart} → ${editingCourse.arrivee})`, editingCourse as unknown as Record<string, unknown>, { chauffeur_id: replaceChauffeurId, statut_planification: 'non_planifie' });
     setShowReplace(false);
     setShowForm(false);

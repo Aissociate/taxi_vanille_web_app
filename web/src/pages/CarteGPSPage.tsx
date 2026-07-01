@@ -74,7 +74,7 @@ export function CarteGPSPage() {
       supabase.from('lignes').select('id, nom, code, couleur').order('code'),
       supabase.from('ligne_arrets').select('*').order('ordre'),
       supabase.from('chauffeurs').select('id, nom, prenom, code, statut').order('code'),
-      supabase.from('courses').select('id, chauffeur_id, ligne_id, statut').eq('statut', 'en_cours'),
+      supabase.from('courses').select('id, chauffeur_id, ligne_id, statut, statut_realisation').in('statut_realisation', ['en_cours', 'en_retard']),
     ]);
     if (lignesRes.data) setLignes(lignesRes.data);
     if (arretsRes.data) setArrets(arretsRes.data);

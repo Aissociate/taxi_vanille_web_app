@@ -12,6 +12,7 @@ interface Course {
   depart: string;
   arrivee: string;
   statut_realisation: string;
+  statut_planification?: string;
   montant: number;
   periode: string;
   ligne_id: string | null;
@@ -183,7 +184,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     const { from, to } = getDateRange();
     const { data } = await supabase
       .from('courses')
-      .select('id, date_heure, depart, arrivee, statut_realisation, montant, periode, ligne_id')
+      .select('id, date_heure, depart, arrivee, statut_realisation, statut_planification, montant, periode, ligne_id')
       .eq('chauffeur_id', chauffeur.id)
       .gte('date_heure', from)
       .lte('date_heure', to)
@@ -237,12 +238,18 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
 
   async function loadAstreinteSessions() {
     const { from, to } = getDateRange();
+    // La colonne `date` est un jour calendaire LOCAL : on ne peut pas la comparer
+    // au jour UTC de l'instant (from.split('T')[0]) sinon decalage d'un jour a
+    // Mayotte (UTC+3). On calcule le jour local de from et le dernier jour inclus.
+    const dstr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const fromDay = dstr(new Date(from));
+    const toDay = dstr(new Date(new Date(to).getTime() - 1));
     const { data } = await supabase
       .from('astreinte_sessions')
       .select('id, date, heure_debut, heure_fin, created_at')
       .eq('chauffeur_id', chauffeur.id)
-      .gte('date', from.split('T')[0])
-      .lte('date', to.split('T')[0])
+      .gte('date', fromDay)
+      .lte('date', toDay)
       .order('date', { ascending: false });
     if (data) setAstreinteSessions(data);
   }
@@ -330,11 +337,12 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   const caProjection = coursesTerminees.reduce((sum, c) => sum + getTarifForCourse(c), 0);
   // Kilometrage stats
   const kmTotal = kilometrage.reduce((s, k) => s + k.km_value, 0);
-  const kmDebut = kilometrage.filter(k => k.type === 'debut_mois');
-  const kmFin = kilometrage.filter(k => k.type === 'fin_mois');
-  const kmParcourus = kmFin.length > 0 && kmDebut.length > 0
-    ? Math.max(0, kmFin[0]?.km_value - kmDebut[0]?.km_value)
-    : 0;
+  // Km parcourus = fin - debut du MEME mois (le plus recent releve), et non les
+  // deux releves les plus recents qui pouvaient appartenir a des mois differents.
+  const kmMoisRecent = kilometrage.find(k => k.type === 'fin_mois')?.mois ?? kilometrage[0]?.mois;
+  const kmDebutM = kilometrage.find(k => k.type === 'debut_mois' && k.mois === kmMoisRecent);
+  const kmFinM = kilometrage.find(k => k.type === 'fin_mois' && k.mois === kmMoisRecent);
+  const kmParcourus = kmDebutM && kmFinM ? Math.max(0, kmFinM.km_value - kmDebutM.km_value) : 0;
 
   // Astreinte hours
   const totalAstreinteMinutes = astreinteSessions.reduce((sum, s) => {
