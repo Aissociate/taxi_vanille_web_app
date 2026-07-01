@@ -6,6 +6,12 @@ import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue
 import type { CourseExecution, Ligne } from '../lib/types';
 import MobileIncidentSheet from '../components/MobileIncidentSheet';
 
+// Date calendaire LOCALE (Mayotte UTC+3) et non UTC : sinon entre 00:00 et 03:00
+// locales, toISOString() renvoie la veille -> sessions d'astreinte en double / perdues.
+function localDayStr(dt: Date = new Date()): string {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
 interface CourseWithDetails {
   id: string;
   date_heure: string;
@@ -142,11 +148,11 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     const endOfDay = new Date(y, m, d + 1).toISOString();
     const endOfTomorrow = new Date(y, m, d + 2).toISOString();
 
-    // Drafts and replaced courses must never reach the driver
+    // Drafts, replaced, cancelled and incident courses must never reach the driver
     const visibleCourses = () =>
       supabase.from('courses').select('*, ligne:lignes(*)').eq('chauffeur_id', chauffeur.id)
         .or('is_brouillon.is.null,is_brouillon.eq.false')
-        .or('statut_realisation.is.null,statut_realisation.neq.remplace');
+        .or('statut_realisation.is.null,and(statut_realisation.neq.remplace,statut_realisation.neq.annule,statut_realisation.neq.incident)');
 
     const [todayRes, tomorrowRes] = await Promise.all([
       visibleCourses().gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
@@ -160,7 +166,7 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       setLastSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
 
       const astreinteCourses = todayRes.data.filter((c: any) => c.is_astreinte === true);
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = localDayStr(today);
 
       // Also honor astreintes planned by the back-office in the dedicated
       // `astreintes` table (not only courses flagged is_astreinte).
@@ -199,7 +205,7 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
   const handleStartAstreinte = async () => {
     if (!chauffeur) return;
     const now = new Date().toISOString();
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDayStr();
     const localId = crypto.randomUUID();
     const sessionData = { id: localId, chauffeur_id: chauffeur.id, date: todayStr, heure_debut: now, astreinte_id: plannedAstreinteId, user_id: chauffeur.user_id || chauffeur.id };
 
@@ -223,7 +229,7 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       enqueue({ table: 'astreinte_sessions', type: 'update', data: { heure_fin: now }, filter: { column: 'id', value: astreinteSession.id } });
     }
     setAstreinteSession(updatedSession);
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDayStr();
     cacheData(`astreinte_${chauffeur.id}_${todayStr}`, updatedSession);
   };
 

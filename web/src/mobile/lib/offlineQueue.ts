@@ -15,6 +15,7 @@ interface QueuedOperation {
   filter?: { column: string; value: string };
   media?: QueuedMedia[];
   createdAt: string;
+  attempts?: number;
 }
 
 const QUEUE_KEY = 'mobile_offline_queue';
@@ -69,9 +70,10 @@ export async function syncQueue(): Promise<{ synced: number; failed: number }> {
   if (queue.length === 0) return { synced: 0, failed: 0 };
 
   let synced = 0;
-  const remaining: QueuedOperation[] = [];
+  let remaining: QueuedOperation[] = [];
 
-  for (const op of queue) {
+  for (let i = 0; i < queue.length; i++) {
+    const op = queue[i];
     try {
       // Upload any media captured offline first, then patch the row data with
       // the resulting public URLs. If an upload fails the whole operation stays
@@ -93,15 +95,27 @@ export async function syncQueue(): Promise<{ synced: number; failed: number }> {
         const { error } = await supabase.from(op.table).insert(op.data);
         if (error) throw error;
       } else if (op.type === 'update' && op.filter) {
-        const { error } = await supabase
+        // count:'exact' : un update sur 0 ligne (la ligne parente, ex. l'insert
+        // course_executions, est peut-etre encore en file) ne doit PAS etre
+        // considere comme reussi puis abandonne -> on re-tente.
+        const { error, count } = await supabase
           .from(op.table)
-          .update(op.data)
+          .update(op.data, { count: 'exact' })
           .eq(op.filter.column, op.filter.value);
         if (error) throw error;
+        if (!count) {
+          op.attempts = (op.attempts || 0) + 1;
+          // Apres plusieurs tentatives la ligne n'existe vraiment plus : on
+          // abandonne pour ne pas boucler indefiniment.
+          if (op.attempts < 5) throw new Error('0 rows updated, will retry');
+        }
       }
       synced++;
     } catch {
-      remaining.push(op);
+      // On preserve l'ordre causal : une op suivante peut dependre de celle qui
+      // vient d'echouer. On stoppe et on re-met en file cette op + les suivantes.
+      remaining = queue.slice(i);
+      break;
     }
   }
 

@@ -140,13 +140,28 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
     };
 
     if (isOnline()) {
-      if (mediaFile) {
-        incidentData[mediaField] = await uploadFile(mediaFile, mediaPath);
+      try {
+        if (mediaFile) {
+          incidentData[mediaField] = await uploadFile(mediaFile, mediaPath);
+        }
+        if (audioBlob) {
+          incidentData.audio_url = await uploadFile(audioBlob, audioPath);
+        }
+        const { error } = await supabase.from('incidents').insert(incidentData);
+        if (error) throw error;
+      } catch {
+        // Echec en ligne (RLS, reseau instable) : on NE perd PAS l'incident
+        // (potentiellement un accident) -> on le bascule en file d'attente.
+        const media: { bucket: string; path: string; dataUrl: string; field: string }[] = [];
+        if (mediaFile && !incidentData[mediaField]) {
+          media.push({ bucket: 'incidents', path: mediaPath, dataUrl: await blobToDataUrl(mediaFile), field: mediaField });
+        }
+        if (audioBlob && !incidentData.audio_url) {
+          media.push({ bucket: 'incidents', path: audioPath, dataUrl: await blobToDataUrl(audioBlob), field: 'audio_url' });
+        }
+        enqueue({ table: 'incidents', type: 'insert', data: incidentData, media: media.length > 0 ? media : undefined });
+        alert('Incident enregistre : il sera renvoye des que la connexion sera stable.');
       }
-      if (audioBlob) {
-        incidentData.audio_url = await uploadFile(audioBlob, audioPath);
-      }
-      await supabase.from('incidents').insert(incidentData);
     } else {
       // Keep the media as data URLs in the queue so they are uploaded when
       // the connection comes back, instead of being silently dropped.

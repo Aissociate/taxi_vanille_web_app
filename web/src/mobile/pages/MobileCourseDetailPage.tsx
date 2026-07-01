@@ -25,6 +25,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
   const [loading, setLoading] = useState(true);
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [showIncident, setShowIncident] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const gpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<Date | null>(null);
@@ -45,7 +46,16 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     if (isOnline()) {
       const { data: courseData } = await supabase.from('courses').select('*, ligne:lignes(*)').eq('id', courseId).maybeSingle();
       if (!courseData) { onNavigate('/mobile/planning'); return; }
-      if (courseData.statut_realisation === 'termine' || courseData.statut === 'terminee') { onNavigate('/mobile/planning'); return; }
+      // Course reaffectee a un autre chauffeur : on ne l'ouvre pas (evite qu'un
+      // ancien chauffeur "ressuscite" une course remplacee en la terminant).
+      if (courseData.chauffeur_id && courseData.chauffeur_id !== chauffeur.id) {
+        alert('Cette course a ete reaffectee a un autre chauffeur.');
+        onNavigate('/mobile/planning'); return;
+      }
+      // Course close/annulee/remplacee ou brouillon : non ouvrable.
+      if (['termine', 'remplace', 'annule', 'incident'].includes(courseData.statut_realisation) || courseData.statut === 'terminee' || courseData.is_brouillon) {
+        onNavigate('/mobile/planning'); return;
+      }
       setCourse(courseData as any);
       cacheData(`course_${courseId}`, courseData);
 
@@ -109,7 +119,9 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
   const handleStart = () => { setStep('depart'); };
 
   const handleValidateDepart = async () => {
-    if (!courseId || !chauffeur) return;
+    if (!courseId || !chauffeur || submitting || execution) return; // anti double-tap / double execution
+    setSubmitting(true);
+    try {
     const now = new Date();
     startTimeRef.current = now;
     const scheduledTime = new Date(course!.date_heure);
@@ -122,7 +134,10 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     const arretDepartData = arrets.length > 0 ? { course_execution_id: executionId, arret_id: arrets[0].id, ordre: 0, montants: passagersDepart, descendants: 0, statut: 'termine', heure_arrivee: now.toISOString(), heure_depart: now.toISOString(), user_id: userId } : null;
 
     if (isOnline()) {
-      await supabase.from('courses').update(courseUpdate).eq('id', courseId);
+      // Depart conditionnel : la course doit toujours nous etre affectee (sinon
+      // elle a ete reaffectee entre l'ouverture et maintenant -> on n'ecrase pas).
+      const { count } = await supabase.from('courses').update(courseUpdate, { count: 'exact' }).eq('id', courseId).eq('chauffeur_id', chauffeur.id);
+      if (!count) { alert('Course reaffectee : depart annule.'); onNavigate('/mobile/planning'); return; }
       const { data } = await supabase.from('course_executions').insert(executionData).select().maybeSingle();
       if (data) {
         setExecution(data as CourseExecution);
@@ -139,10 +154,16 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     }
     startTimer();
     setStep('arrivee');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleTerminer = async () => {
-    if (!execution || !courseId || !chauffeur) return;
+    if (!execution || !courseId || !chauffeur || submitting) return;
+    if (passagersArrivee === 0 && !confirm('Terminer la course avec 0 passager descendant ?')) return;
+    setSubmitting(true);
+    try {
     const now = new Date();
     const userId = chauffeur.user_id || chauffeur.id;
     const arretArriveeData = arrets.length > 1 ? { course_execution_id: execution.id, arret_id: arrets[arrets.length - 1].id, ordre: arrets.length - 1, montants: 0, descendants: passagersArrivee, statut: 'termine', heure_arrivee: now.toISOString(), heure_depart: now.toISOString(), user_id: userId } : null;
@@ -160,7 +181,10 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
       if (plages && plages.length > 0) montant = plages[0].tarif || 0;
     }
 
-    const courseUpdate = { statut: 'terminee', statut_realisation: 'termine', passagers_arrivee: passagersArrivee, nb_passagers: Math.max(passagersDepart, passagersArrivee), montant };
+    // Hors-ligne, on n'ecrit PAS montant:0 (fige a 0 pour toujours) : le montant
+    // sera recalcule cote back-office / a la resynchro quand le tarif est lisible.
+    const courseUpdate: Record<string, unknown> = { statut: 'terminee', statut_realisation: 'termine', passagers_arrivee: passagersArrivee, nb_passagers: Math.max(passagersDepart, passagersArrivee) };
+    if (isOnline()) courseUpdate.montant = montant;
 
     if (isOnline()) {
       if (arretArriveeData) await supabase.from('arret_executions').insert(arretArriveeData);
@@ -174,6 +198,9 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
     if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
     if (timerRef.current) clearInterval(timerRef.current);
     onNavigate('/mobile/planning');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -235,7 +262,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
           <span className="text-sm text-gray-500">passagers<br/>a bord</span>
         </div>
         <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50">
-          <button type="button" onClick={handleValidateDepart} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700">VALIDER ET PARTIR</button>
+          <button type="button" onClick={handleValidateDepart} disabled={submitting} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700 disabled:bg-gray-300">VALIDER ET PARTIR</button>
         </div>
       </div>
     );
@@ -275,8 +302,8 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
         <button type="button" onClick={() => setShowIncident(true)} className="w-full flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-700 py-3 rounded-lg font-semibold text-sm active:bg-red-100">
           <AlertTriangle size={16} /> SIGNALER UN INCIDENT
         </button>
-        <button type="button" onClick={handleTerminer} disabled={passagersArrivee === 0} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700 disabled:bg-gray-300 disabled:cursor-not-allowed">TERMINER LA COURSE</button>
-        {passagersArrivee === 0 && <p className="text-[10px] text-center text-red-500">Saisir le nombre de passagers descendants avant de terminer</p>}
+        <button type="button" onClick={handleTerminer} disabled={submitting} className="w-full bg-orange-600 text-white py-4 rounded-lg font-bold text-lg active:bg-orange-700 disabled:bg-gray-300 disabled:cursor-not-allowed">TERMINER LA COURSE</button>
+        {passagersArrivee === 0 && <p className="text-[10px] text-center text-gray-400">0 passager descendant : une confirmation sera demandee</p>}
       </div>
       {showIncident && chauffeur && (
         <MobileIncidentSheet
