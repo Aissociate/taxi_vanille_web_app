@@ -33,7 +33,7 @@ interface IncidentsPageProps {
 
 type FilterStatus = 'all' | 'open' | 'handled';
 
-export function IncidentsPage({ user }: IncidentsPageProps) {
+export function IncidentsPage(_props: IncidentsPageProps) {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [chauffeurs, setChauffeurs] = useState<Chauffeur[]>([]);
   const [filter, setFilter] = useState<FilterStatus>('all');
@@ -78,15 +78,16 @@ export function IncidentsPage({ user }: IncidentsPageProps) {
   const handledCount = incidents.filter(i => !!i.handled_at).length;
 
   async function handleResolve(incident: Incident) {
-    const { error } = await supabase.from('incidents').update({
+    const payload: Record<string, unknown> = {
       mesure_prise: mesureForm || null,
       handled_at: new Date().toISOString(),
-      coordinateur_id: incident.coordinateur_id || user.id,
-    }).eq('id', incident.id);
-    if (error) {
-      console.error('Resolve error:', error);
-      return;
-    }
+    };
+    // coordinateur_id est une FK vers chauffeurs : ne jamais y ecrire user.id
+    // (id auth) sous peine de violation de contrainte (incident jamais resolu).
+    if (incident.coordinateur_id) payload.coordinateur_id = incident.coordinateur_id;
+    const { error, count } = await supabase.from('incidents').update(payload, { count: 'exact' }).eq('id', incident.id);
+    if (error) { alert(`Impossible de marquer l'incident comme traite : ${error.message}`); return; }
+    if (!count) { alert('Incident introuvable ou droits insuffisants.'); return; }
     setSelectedIncident(null);
     setMesureForm('');
     loadData();

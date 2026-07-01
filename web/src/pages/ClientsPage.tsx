@@ -32,6 +32,7 @@ interface Course {
   date_heure: string;
   montant: number;
   statut: string;
+  statut_realisation?: string;
   depart: string;
   arrivee: string;
   chauffeur_id: string | null;
@@ -93,7 +94,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
   }
 
   async function loadCourses() {
-    const { data } = await supabase.from('courses').select('id, client_id, date_heure, montant, statut, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart');
+    const { data } = await supabase.from('courses').select('id, client_id, date_heure, montant, statut, statut_realisation, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart');
     if (data) setCourses(data);
   }
 
@@ -125,11 +126,14 @@ export function ClientsPage({ user }: ClientsPageProps) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const payload = { ...form, user_id: user.id };
+    // user_id ne doit etre pose qu'a la CREATION : en le renvoyant a l'update on
+    // volait la propriete du client au directeur qui l'avait cree.
     if (editing) {
-      await supabase.from('clients').update(payload).eq('id', editing.id);
+      const { error } = await supabase.from('clients').update(form).eq('id', editing.id);
+      if (error) { alert(`Enregistrement impossible : ${error.message}`); return; }
     } else {
-      await supabase.from('clients').insert(payload);
+      const { error } = await supabase.from('clients').insert({ ...form, user_id: user.id });
+      if (error) { alert(`Enregistrement impossible : ${error.message}`); return; }
     }
     setShowForm(false);
     loadClients();
@@ -139,8 +143,9 @@ export function ClientsPage({ user }: ClientsPageProps) {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Supprimer ce client ?')) return;
-    await supabase.from('clients').delete().eq('id', id);
+    if (!confirm('Supprimer ce client ? Ses courses seront detachees.')) return;
+    const { error } = await supabase.from('clients').delete().eq('id', id);
+    if (error) { alert(`Suppression impossible : ${error.message}`); return; }
     if (selectedClient?.id === id) setSelectedClient(null);
     loadClients();
   }
@@ -158,8 +163,9 @@ export function ClientsPage({ user }: ClientsPageProps) {
     );
     const totalCourses = clientCourses.length;
     const totalMontant = clientCourses.reduce((s, c) => s + (c.montant || 0), 0);
-    const completedCourses = clientCourses.filter(c => c.statut === 'terminee').length;
-    const cancelledCourses = clientCourses.filter(c => c.statut === 'annulee').length;
+    // Base sur statut_realisation (canonique cote web) avec repli sur statut (mobile).
+    const completedCourses = clientCourses.filter(c => c.statut_realisation === 'termine' || c.statut === 'terminee').length;
+    const cancelledCourses = clientCourses.filter(c => c.statut_realisation === 'annule' || c.statut === 'annulee').length;
     return { totalCourses, totalMontant, completedCourses, cancelledCourses };
   }, [selectedClient, courses, periodStart]);
 

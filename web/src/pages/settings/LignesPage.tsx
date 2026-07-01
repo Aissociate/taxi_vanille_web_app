@@ -187,27 +187,38 @@ export function LignesPage({ user }: LignesPageProps) {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Supprimer cette ligne et toutes ses donnees associees (arrets, tarifs, astreintes) ? Les chauffeurs seront detaches. Cette action est irreversible.')) return;
-    const { data: arretIds } = await supabase.from('ligne_arrets').select('id').eq('ligne_id', id);
+    if (!confirm('Supprimer cette ligne ? Ses arrets, tarifs et astreintes seront supprimes ; chauffeurs et courses seront detaches ; les rapports clients seront conserves (ligne detachee). Action irreversible.')) return;
+    // On controle chaque etape et on ABANDONNE a la premiere erreur : sinon un
+    // echec en cours de cascade detruisait des donnees en laissant la ligne.
+    const { data: arretIds, error: e0 } = await supabase.from('ligne_arrets').select('id').eq('ligne_id', id);
+    if (e0) { alert(`Suppression impossible : ${e0.message}`); return; }
     if (arretIds && arretIds.length > 0) {
-      const ids = arretIds.map(a => a.id);
-      await supabase.from('arret_executions').delete().in('arret_id', ids);
+      const { error } = await supabase.from('arret_executions').delete().in('arret_id', arretIds.map(a => a.id));
+      if (error) { alert(`Suppression interrompue (executions arrets) : ${error.message}`); return; }
     }
-    await supabase.from('ligne_arrets').delete().eq('ligne_id', id);
-    await supabase.from('tarifs').delete().eq('ligne_id', id);
-    await supabase.from('astreintes').delete().eq('ligne_id', id);
-    await supabase.from('data_report_client_consolidated').delete().eq('ligne_id', id);
-    await supabase.from('chauffeurs').update({ ligne_id: null }).eq('ligne_id', id);
-    await supabase.from('courses').update({ ligne_id: null }).eq('ligne_id', id);
+    // tarif_plages de la ligne : DOIT etre supprime, sinon ligne_id passe a NULL
+    // (SET NULL) et ces tarifs deviennent le tarif generique de TOUTES les lignes.
+    const steps: Array<[string, PromiseLike<{ error: { message: string } | null }>]> = [
+      ['arrets', supabase.from('ligne_arrets').delete().eq('ligne_id', id)],
+      ['tarifs', supabase.from('tarifs').delete().eq('ligne_id', id)],
+      ['tarifs horaires', supabase.from('tarif_plages').delete().eq('ligne_id', id)],
+      ['astreintes', supabase.from('astreintes').delete().eq('ligne_id', id)],
+      ['detach rapports', supabase.from('data_report_client_consolidated').update({ ligne_id: null }).eq('ligne_id', id)],
+      ['detach chauffeurs', supabase.from('chauffeurs').update({ ligne_id: null }).eq('ligne_id', id)],
+      ['detach courses', supabase.from('courses').update({ ligne_id: null }).eq('ligne_id', id)],
+    ];
+    for (const [label, run] of steps) {
+      const { error } = await run;
+      if (error) { alert(`Suppression interrompue (${label}) : ${error.message}`); loadLignes(); return; }
+    }
     const { error } = await supabase.from('lignes').delete().eq('id', id);
-    if (error) {
-      alert('Erreur lors de la suppression : ' + error.message);
-    }
+    if (error) alert('Erreur lors de la suppression de la ligne : ' + error.message);
     loadLignes();
   }
 
   async function handleToggleActive(id: string, active: boolean) {
-    await supabase.from('lignes').update({ active: !active }).eq('id', id);
+    const { error } = await supabase.from('lignes').update({ active: !active }).eq('id', id);
+    if (error) { alert(`Modification impossible : ${error.message}`); return; }
     loadLignes();
   }
 

@@ -99,23 +99,40 @@ export function ChauffeursPage({ user, onNavigateToPage }: ChauffeursPageProps) 
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Supprimer ce chauffeur ?')) return;
-    await supabase.from('chauffeurs').delete().eq('id', id);
+    if (!confirm('Supprimer ce chauffeur ? (Ses acomptes et documents seront supprimes. Prefererez la desactivation si le chauffeur a un historique.)')) return;
+    const { error, count } = await supabase.from('chauffeurs').delete({ count: 'exact' }).eq('id', id);
+    if (error) {
+      // FK : le chauffeur a une activite (courses executees, incidents, GPS...).
+      alert(`Suppression impossible : ce chauffeur a un historique lie.\nDesactivez-le plutot que de le supprimer.\n(${error.message})`);
+      return;
+    }
+    if (!count) { alert('Suppression impossible : chauffeur introuvable ou droits insuffisants.'); return; }
     if (selectedId === id) setSelectedId(null);
     loadChauffeurs();
   }
 
   async function handleToggleStatus(id: string, currentStatut: string) {
     const newStatut = currentStatut === 'actif' ? 'inactif' : 'actif';
-    await supabase.from('chauffeurs').update({ statut: newStatut }).eq('id', id);
+    if (newStatut === 'inactif') {
+      // Avertir si le chauffeur a des courses a venir (elles ne seront pas reaffectees).
+      const { count } = await supabase.from('courses').select('id', { count: 'exact', head: true })
+        .eq('chauffeur_id', id).gte('date_heure', new Date().toISOString());
+      if (count && !confirm(`Ce chauffeur a ${count} course(s) a venir qui ne seront pas reaffectees automatiquement. Le desactiver quand meme ?`)) return;
+    }
+    const { error } = await supabase.from('chauffeurs').update({ statut: newStatut }).eq('id', id);
+    if (error) { alert(`Modification impossible : ${error.message}`); return; }
     loadChauffeurs();
   }
 
   async function handleSave(data: Partial<Chauffeur>) {
-    if (editingChauffeur) {
-      await supabase.from('chauffeurs').update({ ...data, updated_at: new Date().toISOString() }).eq('id', editingChauffeur.id);
-    } else {
-      await supabase.from('chauffeurs').insert({ ...data, user_id: user.id });
+    const { error } = editingChauffeur
+      ? await supabase.from('chauffeurs').update({ ...data, updated_at: new Date().toISOString() }).eq('id', editingChauffeur.id)
+      : await supabase.from('chauffeurs').insert({ ...data, user_id: user.id });
+    if (error) {
+      alert(error.code === '23505'
+        ? 'Un chauffeur avec ce code existe deja.'
+        : `Enregistrement impossible : ${error.message}`);
+      return;
     }
     setShowForm(false);
     loadChauffeurs();

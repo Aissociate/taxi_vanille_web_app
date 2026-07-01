@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 import { Users, Plus, Key, Trash2, X, Shield, Mail, Clock } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 
@@ -69,7 +70,15 @@ export function UsersPage({ user }: Props) {
     }
 
     setSubmitting(true);
-    const { error } = await supabase.auth.signUp({
+    // Client isole SANS persistance de session : signUp cree bien le compte mais
+    // ne remplace PAS la session de l'admin dans ce navigateur (bug ou l'admin se
+    // retrouvait connecte en tant que le nouvel utilisateur).
+    const tmpClient = createClient(
+      import.meta.env.VITE_SUPABASE_URL || '',
+      import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+      { auth: { persistSession: false, autoRefreshToken: false } }
+    );
+    const { error } = await tmpClient.auth.signUp({
       email: createForm.email,
       password: createForm.password,
     });
