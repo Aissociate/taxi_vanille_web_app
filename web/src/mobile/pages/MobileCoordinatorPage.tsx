@@ -49,12 +49,14 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   useEffect(() => {
     if (!chauffeur) { onNavigate('/mobile'); return; }
     fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    // Rafraichissements en ARRIERE-PLAN : ne pas remettre le spinner plein ecran
+    // toutes les 30 s (ni a chaque event realtime), sinon on interrompt l'ecran.
+    const interval = setInterval(() => fetchAll(true), 30000);
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => fetchAll(), 600);
+      refreshTimer = setTimeout(() => fetchAll(true), 600);
     };
     const channel = supabase
       .channel(`coordinator_${chauffeur.id}`)
@@ -70,9 +72,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     };
   }, [chauffeur]);
 
-  const fetchAll = async () => {
+  const fetchAll = async (background = false) => {
     if (!chauffeur) return;
-    setLoading(true);
+    if (!background) setLoading(true);
     // Local-day window, aligned with the back-office planning (local time)
     const today = new Date();
     const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
@@ -111,13 +113,17 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     if (coursesRes.data) {
       const scoped = coursesRes.data.filter(inCreneau);
       const scopedIds = new Set(scoped.map((c: any) => c.id));
+      const scopedChauffeurIds = new Set(scoped.map((c: any) => c.chauffeur_id).filter(Boolean));
       const coursesWithIncidents = scoped.map((course: any) => {
         const incident = incidentsRes.data?.find((inc: any) => inc.course_id === course.id);
         return { ...course, incident: incident || null };
       });
       setCourses(coursesWithIncidents as CourseWithChauffeur[]);
-      // N'afficher que les incidents rattaches aux courses supervisees
-      setIncidents(((incidentsRes.data || []).filter((inc: any) => scopedIds.has(inc.course_id))) as IncidentDetail[]);
+      // Incidents des courses supervisees + incidents SANS course (signales depuis
+      // le planning) emis par un chauffeur d'une course supervisee du jour.
+      setIncidents(((incidentsRes.data || []).filter((inc: any) =>
+        scopedIds.has(inc.course_id) || (!inc.course_id && scopedChauffeurIds.has(inc.chauffeur_id))
+      )) as IncidentDetail[]);
     } else {
       setCourses([]);
       setIncidents([]);
@@ -134,10 +140,10 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   };
 
   const getRealisationLabel = (s: string | null): string => {
-    switch (s) { case 'terminee': case 'termine': return 'TERMINE'; case 'en_retard': return 'EN RETARD'; default: return 'PROGRAMME'; }
+    switch (s) { case 'terminee': case 'termine': return 'TERMINE'; case 'en_cours': return 'EN COURS'; case 'en_retard': return 'EN RETARD'; default: return 'PROGRAMME'; }
   };
   const getRealisationColor = (s: string | null): string => {
-    switch (s) { case 'terminee': case 'termine': return 'bg-green-100 text-green-800'; case 'en_retard': return 'bg-yellow-100 text-yellow-800'; default: return 'bg-blue-50 text-blue-700'; }
+    switch (s) { case 'terminee': case 'termine': return 'bg-green-100 text-green-800'; case 'en_cours': return 'bg-orange-100 text-orange-800'; case 'en_retard': return 'bg-yellow-100 text-yellow-800'; default: return 'bg-blue-50 text-blue-700'; }
   };
 
   const handleStartReplacement = async (course: CourseWithChauffeur) => {
@@ -169,31 +175,45 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   };
 
   const handleConfirmReplacement = async (newDriverId: string) => {
-    if (!replacementCourse || !chauffeur) return;
+    if (!replacementCourse || !chauffeur || replacingDriver) return;
     setReplacingDriver(true);
-    await supabase.from('courses').update({ statut_realisation: 'remplace' }).eq('id', replacementCourse.id);
-    await supabase.from('courses').insert({
-      date_heure: replacementCourse.date_heure,
-      chauffeur_id: newDriverId,
-      ligne_id: replacementCourse.ligne?.id || null,
-      depart: replacementCourse.depart,
-      arrivee: replacementCourse.arrivee,
-      statut: 'planifiee',
-      statut_planification: 'non_planifie',
-      statut_realisation: 'programme',
-      periode: replacementCourse.periode || 'matin',
-      duree_minutes: replacementCourse.duree_minutes || 60,
-      user_id: replacementCourse.user_id,
-      coordinateur_id: chauffeur.id,
-      notes: '[Remplacement]',
-    });
-    if (replacementCourse.incident) {
-      await supabase.from('incidents').update({ mesure_prise: 'remplacement', coordinateur_id: chauffeur.id, handled_at: new Date().toISOString() }).eq('id', replacementCourse.incident.id);
+    try {
+      // Update conditionnel + controle : si la course a deja ete remplacee (ou
+      // n'existe plus), on n'insere PAS le remplacant (evite la course fantome).
+      const { count } = await supabase.from('courses')
+        .update({ statut_realisation: 'remplace' }, { count: 'exact' })
+        .eq('id', replacementCourse.id).neq('statut_realisation', 'remplace');
+      if (!count) { alert('Cette course a deja ete remplacee ou modifiee.'); setReplacementCourse(null); setAvailableDrivers([]); fetchAll(); return; }
+      const { error: insErr } = await supabase.from('courses').insert({
+        date_heure: replacementCourse.date_heure,
+        chauffeur_id: newDriverId,
+        ligne_id: replacementCourse.ligne?.id || null,
+        depart: replacementCourse.depart,
+        arrivee: replacementCourse.arrivee,
+        statut: 'planifiee',
+        statut_planification: 'non_planifie',
+        statut_realisation: 'programme',
+        periode: replacementCourse.periode || 'matin',
+        duree_minutes: replacementCourse.duree_minutes || 60,
+        user_id: replacementCourse.user_id,
+        coordinateur_id: chauffeur.id,
+        notes: '[Remplacement]',
+      });
+      if (insErr) {
+        // Rollback pour ne pas laisser une course masquee sans remplacant.
+        await supabase.from('courses').update({ statut_realisation: 'programme' }).eq('id', replacementCourse.id);
+        alert(`Remplacement impossible : ${insErr.message}`);
+        return;
+      }
+      if (replacementCourse.incident) {
+        await supabase.from('incidents').update({ mesure_prise: 'remplacement', coordinateur_id: chauffeur.id, handled_at: new Date().toISOString() }).eq('id', replacementCourse.incident.id);
+      }
+      setReplacementCourse(null);
+      setAvailableDrivers([]);
+      fetchAll();
+    } finally {
+      setReplacingDriver(false);
     }
-    setReplacingDriver(false);
-    setReplacementCourse(null);
-    setAvailableDrivers([]);
-    fetchAll();
   };
 
   const handleConfirmDepart = async (course: CourseWithChauffeur) => {
