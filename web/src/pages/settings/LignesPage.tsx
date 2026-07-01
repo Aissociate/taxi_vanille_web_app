@@ -53,7 +53,15 @@ export function LignesPage({ user }: LignesPageProps) {
   const [originalArretIds, setOriginalArretIds] = useState<string[]>([]);
 
   async function saveArretGps(arretId: string) {
-    await supabase.from('ligne_arrets').update({ latitude: editingArretData.latitude, longitude: editingArretData.longitude }).eq('id', arretId);
+    // On controle le resultat : un echec RLS renvoyait un succes avec 0 ligne
+    // modifiee, l'edition se fermait et les coordonnees restaient inchangees
+    // ("impossible de changer les points GPS").
+    const { error, count } = await supabase
+      .from('ligne_arrets')
+      .update({ latitude: editingArretData.latitude, longitude: editingArretData.longitude }, { count: 'exact' })
+      .eq('id', arretId);
+    if (error) { alert(`Modification impossible : ${error.message}`); return; }
+    if (!count) { alert('Modification impossible : arret introuvable ou droits insuffisants.'); return; }
     setEditingArretId(null);
     if (selectedLigne) selectLigne(selectedLigne);
   }

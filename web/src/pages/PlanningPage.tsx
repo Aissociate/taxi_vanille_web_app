@@ -32,6 +32,7 @@ interface Chauffeur {
   prenom: string;
   ligne_id: string | null;
   is_coordinateur: boolean;
+  statut: string;
 }
 
 interface Ligne {
@@ -216,7 +217,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function loadRefs() {
     const [ch, li, cl, ar] = await Promise.all([
-      supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id, is_coordinateur').order('code, nom'),
+      supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id, is_coordinateur, statut').order('code, nom'),
       supabase.from('lignes').select('id, code, nom, depart, arrivee, couleur').eq('active', true).order('code'),
       supabase.from('clients').select('id, nom'),
       supabase.from('ligne_arrets').select('ligne_id, nom, ordre').order('ordre', { ascending: true }),
@@ -425,6 +426,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       return;
     }
     setDupLoading(true);
+    let skippedDup = 0;
     try {
       const sourceCourses = getDuplicableCourses().filter(c => dupSelectedIds.has(c.id));
       const sourceAstreintes = dupIncludeAstreintes ? getDuplicableAstreintes() : [];
@@ -533,14 +535,48 @@ export function PlanningPage({ user }: PlanningPageProps) {
         }
       }
 
+      // Garde anti-doublon : ne pas recreer une course identique (meme chauffeur,
+      // meme instant, meme trajet) si elle existe deja pour la periode cible, ni
+      // en creer deux fois dans le meme lot. Evite les "2 fois le meme trajet".
+      if (newCourses.length > 0) {
+        const times = newCourses.map(c => new Date(c.date_heure as string).getTime());
+        const minT = new Date(Math.min(...times));
+        const maxT = new Date(Math.max(...times) + 60000);
+        const { data: existing } = await supabase
+          .from('courses')
+          .select('chauffeur_id, date_heure, depart, arrivee')
+          .gte('date_heure', minT.toISOString())
+          .lt('date_heure', maxT.toISOString());
+        const keyOf = (chId: unknown, dh: string, dep: unknown, arr: unknown) =>
+          `${chId || ''}|${new Date(dh).getTime()}|${dep || ''}|${arr || ''}`;
+        const seen = new Set((existing || []).map(e => keyOf(e.chauffeur_id, e.date_heure as string, e.depart, e.arrivee)));
+        const deduped: Array<Record<string, unknown>> = [];
+        for (const c of newCourses) {
+          const k = keyOf(c.chauffeur_id, c.date_heure as string, c.depart, c.arrivee);
+          if (seen.has(k)) continue; // existe deja en base ou deja ajoute dans ce lot
+          seen.add(k);
+          deduped.push(c);
+        }
+        skippedDup = newCourses.length - deduped.length;
+        newCourses.length = 0;
+        newCourses.push(...deduped);
+      }
+
       const totalNew = newCourses.length + newAstreintes.length + newCreneaux.length;
-      if (totalNew === 0) { alert('Aucun jour cible ne correspond aux criteres'); setDupLoading(false); return; }
+      if (totalNew === 0) {
+        alert(skippedDup > 0
+          ? `Rien a dupliquer : les ${skippedDup} course(s) existent deja pour la periode cible (aucun doublon cree).`
+          : 'Aucun jour cible ne correspond aux criteres');
+        setDupLoading(false);
+        return;
+      }
 
       const parts: string[] = [];
       if (newCourses.length) parts.push(`${newCourses.length} course(s)`);
       if (newAstreintes.length) parts.push(`${newAstreintes.length} astreinte(s)`);
       if (newCreneaux.length) parts.push(`${newCreneaux.length} creneau(x) coordinateur`);
-      if (!confirm(`${parts.join(', ')} vont etre crees en brouillon. Continuer ?`)) {
+      const skipNote = skippedDup > 0 ? `\n(${skippedDup} course(s) deja existante(s) ignoree(s))` : '';
+      if (!confirm(`${parts.join(', ')} vont etre crees en brouillon.${skipNote} Continuer ?`)) {
         setDupLoading(false);
         return;
       }
@@ -569,7 +605,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       if (insAstreintes.done) resume.push(`${insAstreintes.done} astreinte(s)`);
       if (insCreneaux.done) resume.push(`${insCreneaux.done} creneau(x)`);
       if (resume.length) {
-        alert(`Duplique en brouillon avec succes : ${resume.join(', ')}.`);
+        alert(`Duplique en brouillon avec succes : ${resume.join(', ')}.${skippedDup > 0 ? `\n${skippedDup} doublon(s) ignore(s).` : ''}`);
         await logAction('duplicate', 'courses', null, `Duplication: ${resume.join(', ')} crees en brouillon`, null, { courses: resCourses.done, astreintes: insAstreintes.done, creneaux: insCreneaux.done });
       }
       setShowDuplicate(false);
@@ -1016,15 +1052,22 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   // Filtering
   const filteredChauffeurs = useMemo(() => {
-    let result = chauffeurs;
+    // Les chauffeurs desactives ne doivent plus apparaitre dans le planning.
+    let result = chauffeurs.filter(c => c.statut === 'actif');
     if (lineFilter !== 'all') {
-      result = result.filter(c => c.ligne_id === lineFilter);
+      // Tri par la ligne DE LA COURSE (pas seulement la ligne par defaut du
+      // chauffeur) : un chauffeur permute temporairement sur une autre ligne
+      // apparait des qu'il a une course sur la ligne filtree.
+      const chauffeurIdsOnLine = new Set(
+        courses.filter(c => c.ligne_id === lineFilter && c.chauffeur_id).map(c => c.chauffeur_id as string)
+      );
+      result = result.filter(c => c.ligne_id === lineFilter || chauffeurIdsOnLine.has(c.id));
     }
     if (chauffeurFilter !== 'all') {
       result = result.filter(c => c.id === chauffeurFilter);
     }
     return result;
-  }, [chauffeurs, lineFilter, chauffeurFilter]);
+  }, [chauffeurs, courses, lineFilter, chauffeurFilter]);
 
   const filteredCourses = useMemo(() => {
     let result = courses;
@@ -1043,12 +1086,14 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const chauffeursByLigne = useMemo(() => {
     const groups: Map<string | null, Chauffeur[]> = new Map();
     filteredChauffeurs.forEach(c => {
-      const key = c.ligne_id;
+      // Quand une ligne est filtree, on regroupe tout le monde sous cette ligne
+      // (la ligne de la course), pas sous la ligne par defaut de chaque chauffeur.
+      const key = lineFilter !== 'all' ? lineFilter : c.ligne_id;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(c);
     });
     return groups;
-  }, [filteredChauffeurs]);
+  }, [filteredChauffeurs, lineFilter]);
 
   function getCourseForChauffeur(chauffeurId: string, date?: Date): Course[] {
     return filteredCourses.filter(c => {
@@ -1235,7 +1280,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
               className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:border-amber-500"
             >
               <option value="all">Tous</option>
-              {chauffeurs.map(c => (
+              {chauffeurs.filter(c => c.statut === 'actif').map(c => (
                 <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>
               ))}
             </select>

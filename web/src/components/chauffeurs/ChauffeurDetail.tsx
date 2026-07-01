@@ -115,30 +115,37 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
 
   function getDateRange(): { from: string; to: string } {
     const now = referenceDate;
-    const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
-    let from: string;
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const d = now.getDate();
+    // Le "to" doit couvrir la FIN de la periode selectionnee (dimanche pour la
+    // semaine, dernier jour du mois, 31/12 pour l'annee) et non le jour courant.
+    // Sinon la vue "semaine" n'affiche que du lundi jusqu'a aujourd'hui et masque
+    // les courses des jours suivants de la meme semaine (ex: 1er juillet vu le 30 juin).
+    let from: Date, to: Date;
     switch (period) {
       case 'jour':
-        from = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+        from = new Date(y, m, d, 0, 0, 0);
+        to = new Date(y, m, d, 23, 59, 59);
         break;
       case 'semaine': {
         const day = now.getDay() || 7;
-        const monday = new Date(now);
-        monday.setDate(now.getDate() - day + 1);
-        monday.setHours(0, 0, 0, 0);
-        from = monday.toISOString();
+        from = new Date(y, m, d - day + 1, 0, 0, 0);
+        to = new Date(y, m, d - day + 7, 23, 59, 59);
         break;
       }
       case 'mois':
-        from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        from = new Date(y, m, 1, 0, 0, 0);
+        to = new Date(y, m + 1, 0, 23, 59, 59);
         break;
       case 'annee':
-        from = new Date(now.getFullYear(), 0, 1).toISOString();
+        from = new Date(y, 0, 1, 0, 0, 0);
+        to = new Date(y, 11, 31, 23, 59, 59);
         break;
       default:
-        from = '2000-01-01T00:00:00.000Z';
+        return { from: '2000-01-01T00:00:00.000Z', to: new Date(y + 5, 11, 31, 23, 59, 59).toISOString() };
     }
-    return { from, to };
+    return { from: from.toISOString(), to: to.toISOString() };
   }
 
   function navigatePeriod(direction: number) {
