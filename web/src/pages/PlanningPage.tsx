@@ -309,8 +309,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [dupSelectedIds, setDupSelectedIds] = useState<Set<string>>(new Set());
   const [dupChauffeurFilter, setDupChauffeurFilter] = useState('');
   const [dupTargetDates, setDupTargetDates] = useState<string[]>([]);
-  const [dupIncludeAstreintes, setDupIncludeAstreintes] = useState(false);
-  const [dupIncludeCreneaux, setDupIncludeCreneaux] = useState(false);
 
   async function loadJoursFeries() {
     const { data } = await supabase.from('jours_feries').select('date, recurrent');
@@ -337,8 +335,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setDupWeeks(1);
     setDupChauffeurFilter('');
     setDupTargetDates([]);
-    setDupIncludeAstreintes(false);
-    setDupIncludeCreneaux(false);
     // Pre-select all duplicable courses in current view
     const duplicable = getDuplicableCourses();
     setDupSelectedIds(new Set(duplicable.map(c => c.id)));
@@ -384,70 +380,14 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return !['remplace', 'annule', 'incident'].includes(c.statut_realisation || '');
   }
 
-  // Astreintes / creneaux coordinateur de la vue courante (jour ou semaine),
-  // filtres sur leur date de debut, pour duplication en meme temps que les courses.
-  function inCurrentView(dateStr: string): boolean {
-    const d = new Date(dateStr);
-    if (view === 'jour') return isSameDay(d, currentDate);
-    const monday = getMonday(currentDate);
-    const sunday = new Date(monday);
-    sunday.setDate(sunday.getDate() + 7);
-    return d >= monday && d < sunday;
-  }
-
-  function getDuplicableAstreintes(): Astreinte[] {
-    return astreintes.filter(a => inCurrentView(a.date_debut));
-  }
-
-  function getDuplicableCreneaux(): CoordCreneau[] {
-    return coordCreneaux.filter(cc => inCurrentView(cc.date_debut));
-  }
-
-  // Decale une plage [debut, fin] de nDays jours en conservant l'heure (mur).
-  function shiftRange(debutStr: string, finStr: string, nDays: number): { date_debut: string; date_fin: string } {
-    const d = new Date(debutStr);
-    const f = new Date(finStr);
-    d.setDate(d.getDate() + nDays);
-    f.setDate(f.getDate() + nDays);
-    return { date_debut: toLocalDateTimeStrTz(d), date_fin: toLocalDateTimeStrTz(f) };
-  }
-
-  // Nombre de jours (entier) entre la date de depart d'un element source et une date cible (minuit local).
-  function daysToTarget(sourceDebutStr: string, targetMidnight: Date): number {
-    const src = new Date(sourceDebutStr);
-    src.setHours(0, 0, 0, 0);
-    return Math.round((targetMidnight.getTime() - src.getTime()) / 86400000);
-  }
-
   async function handleDuplicate() {
-    if (dupSelectedIds.size === 0 && !dupIncludeAstreintes && !dupIncludeCreneaux) {
-      alert('Selectionnez au moins une course, ou cochez les astreintes / creneaux a dupliquer');
-      return;
-    }
+    if (dupSelectedIds.size === 0) { alert('Selectionnez au moins une course'); return; }
     setDupLoading(true);
     try {
       const sourceCourses = getDuplicableCourses().filter(c => dupSelectedIds.has(c.id));
-      const sourceAstreintes = dupIncludeAstreintes ? getDuplicableAstreintes() : [];
-      const sourceCreneaux = dupIncludeCreneaux ? getDuplicableCreneaux() : [];
+      if (sourceCourses.length === 0) { alert('Aucune course selectionnee'); setDupLoading(false); return; }
 
       const newCourses: Array<Record<string, unknown>> = [];
-      const newAstreintes: Array<Record<string, unknown>> = [];
-      const newCreneaux: Array<Record<string, unknown>> = [];
-
-      const buildAstreinte = (a: Astreinte, nDays: number) => {
-        const { date_debut, date_fin } = shiftRange(a.date_debut, a.date_fin, nDays);
-        newAstreintes.push({
-          chauffeur_id: a.chauffeur_id, ligne_id: a.ligne_id, coordinateur_id: a.coordinateur_id,
-          date_debut, date_fin, notes: a.notes, is_brouillon: true, user_id: user.id,
-        });
-      };
-      const buildCreneau = (cc: CoordCreneau, nDays: number) => {
-        const { date_debut, date_fin } = shiftRange(cc.date_debut, cc.date_fin, nDays);
-        newCreneaux.push({
-          coordinateur_id: cc.coordinateur_id, ligne_id: cc.ligne_id,
-          date_debut, date_fin, notes: cc.notes, is_brouillon: true, user_id: user.id,
-        });
-      };
 
       if (dupTargetDates.length > 0) {
         dupTargetDates.forEach(targetDateStr => {
@@ -468,8 +408,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
               is_brouillon: true,
             });
           });
-          sourceAstreintes.forEach(a => buildAstreinte(a, daysToTarget(a.date_debut, targetDate)));
-          sourceCreneaux.forEach(cc => buildCreneau(cc, daysToTarget(cc.date_debut, targetDate)));
         });
       } else {
         const startDate = new Date(currentDate);
@@ -496,8 +434,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 is_brouillon: true,
               });
             });
-            sourceAstreintes.forEach(a => buildAstreinte(a, daysToTarget(a.date_debut, targetDate)));
-            sourceCreneaux.forEach(cc => buildCreneau(cc, daysToTarget(cc.date_debut, targetDate)));
           }
         } else {
           for (let weekOffset = 1; weekOffset <= dupWeeks; weekOffset++) {
@@ -518,64 +454,34 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 is_brouillon: true,
               });
             });
-            const nDays = weekOffset * 7;
-            sourceAstreintes.forEach(a => {
-              const td = new Date(a.date_debut); td.setDate(td.getDate() + nDays);
-              if (!isDayAllowed(td, joursFeries)) return;
-              buildAstreinte(a, nDays);
-            });
-            sourceCreneaux.forEach(cc => {
-              const td = new Date(cc.date_debut); td.setDate(td.getDate() + nDays);
-              if (!isDayAllowed(td, joursFeries)) return;
-              buildCreneau(cc, nDays);
-            });
           }
         }
       }
 
-      const totalNew = newCourses.length + newAstreintes.length + newCreneaux.length;
-      if (totalNew === 0) { alert('Aucun jour cible ne correspond aux criteres'); setDupLoading(false); return; }
+      if (newCourses.length === 0) { alert('Aucun jour cible ne correspond aux criteres'); setDupLoading(false); return; }
 
-      const parts: string[] = [];
-      if (newCourses.length) parts.push(`${newCourses.length} course(s)`);
-      if (newAstreintes.length) parts.push(`${newAstreintes.length} astreinte(s)`);
-      if (newCreneaux.length) parts.push(`${newCreneaux.length} creneau(x) coordinateur`);
-      if (!confirm(`${parts.join(', ')} vont etre crees en brouillon. Continuer ?`)) {
+      if (!confirm(`${newCourses.length} course(s) vont etre creees en brouillon. Continuer ?`)) {
         setDupLoading(false);
         return;
       }
 
-      // Helper d'insertion par lots ; renvoie le nombre insere, stoppe et alerte en cas d'erreur.
-      const insertBatched = async (table: string, rows: Array<Record<string, unknown>>, label: string) => {
-        let done = 0;
-        for (let i = 0; i < rows.length; i += 50) {
-          const batch = rows.slice(i, i + 50);
-          const { error } = await supabase.from(table).insert(batch);
-          if (error) {
-            alert(`Erreur lors de la duplication des ${label} : ${done} cree(s) sur ${rows.length} avant l'echec.\n${error.message}`);
-            return { done, ok: false };
-          }
-          done += batch.length;
+      let inserted = 0;
+      for (let i = 0; i < newCourses.length; i += 50) {
+        const batch = newCourses.slice(i, i + 50);
+        const { error } = await supabase.from('courses').insert(batch);
+        if (error) {
+          alert(`Erreur lors de la duplication : ${inserted} course(s) creee(s) sur ${newCourses.length} avant l'echec.\n${error.message}`);
+          break;
         }
-        return { done, ok: true };
-      };
+        inserted += batch.length;
+      }
 
-      const resCourses = await insertBatched('courses', newCourses, 'courses');
-      const insAstreintes = resCourses.ok ? await insertBatched('astreintes', newAstreintes, 'astreintes') : { done: 0, ok: false };
-      const insCreneaux = (resCourses.ok && insAstreintes.ok) ? await insertBatched('coordinateur_creneaux', newCreneaux, 'creneaux coordinateur') : { done: 0, ok: false };
-
-      const resume: string[] = [];
-      if (resCourses.done) resume.push(`${resCourses.done} course(s)`);
-      if (insAstreintes.done) resume.push(`${insAstreintes.done} astreinte(s)`);
-      if (insCreneaux.done) resume.push(`${insCreneaux.done} creneau(x)`);
-      if (resume.length) {
-        alert(`Duplique en brouillon avec succes : ${resume.join(', ')}.`);
-        await logAction('duplicate', 'courses', null, `Duplication: ${resume.join(', ')} crees en brouillon`, null, { courses: resCourses.done, astreintes: insAstreintes.done, creneaux: insCreneaux.done });
+      if (inserted > 0) {
+        alert(`${inserted} course(s) dupliquee(s) en brouillon avec succes.`);
+        await logAction('duplicate', 'courses', null, `Duplication: ${sourceCourses.length} course(s) selectionnee(s) → ${inserted} course(s) creees en brouillon`, null, { count: inserted });
       }
       setShowDuplicate(false);
       loadCourses();
-      loadAstreintes();
-      loadCoordCreneaux();
     } finally {
       setDupLoading(false);
     }
@@ -1717,7 +1623,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   <Copy className="w-4 h-4 text-amber-600" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-gray-900">Dupliquer le planning</h3>
+                  <h3 className="font-bold text-gray-900">Dupliquer des courses</h3>
                   <p className="text-xs text-gray-500 mt-0.5">
                     {view === 'jour' ? `Journee du ${formatDateFr(currentDate)}` : `Semaine du ${formatDateFr(getMonday(currentDate))}`}
                   </p>
@@ -1769,23 +1675,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   })}
                 </div>
                 <p className="text-[10px] text-gray-400 mt-1">{dupSelectedIds.size} course(s) selectionnee(s)</p>
-              </div>
-
-              {/* Autres elements a inclure */}
-              <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase mb-2 block">Inclure aussi</label>
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-3 px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input type="checkbox" checked={dupIncludeAstreintes} onChange={(e) => setDupIncludeAstreintes(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
-                    <span className="text-xs font-medium text-gray-800 flex-1">Les astreintes</span>
-                    <span className="text-[10px] text-gray-400">{getDuplicableAstreintes().length} sur la {view === 'jour' ? 'journee' : 'semaine'}</span>
-                  </label>
-                  <label className="flex items-center gap-3 px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input type="checkbox" checked={dupIncludeCreneaux} onChange={(e) => setDupIncludeCreneaux(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
-                    <span className="text-xs font-medium text-gray-800 flex-1">Les creneaux coordinateur</span>
-                    <span className="text-[10px] text-gray-400">{getDuplicableCreneaux().length} sur la {view === 'jour' ? 'journee' : 'semaine'}</span>
-                  </label>
-                </div>
               </div>
 
               {/* Step 2: Target */}
@@ -1850,8 +1739,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
               {/* Summary */}
               <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
                 <p className="text-xs font-medium text-amber-800">
-                  {dupSelectedIds.size} course(s){dupIncludeAstreintes ? ` + ${getDuplicableAstreintes().length} astreinte(s)` : ''}{dupIncludeCreneaux ? ` + ${getDuplicableCreneaux().length} creneau(x)` : ''} × {dupTargetDates.length > 0 ? `${dupTargetDates.length} date(s)` : `${Object.values(dupDays).filter(Boolean).length} jour(s)/sem × ${dupWeeks} sem.`}
-                  {' '}→ crees en <span className="font-bold">brouillon</span>
+                  {dupSelectedIds.size} course(s) × {dupTargetDates.length > 0 ? `${dupTargetDates.length} date(s)` : `${Object.values(dupDays).filter(Boolean).length} jour(s)/sem × ${dupWeeks} sem.`}
+                  {' '}→ creees en <span className="font-bold">brouillon</span>
                 </p>
               </div>
             </div>
@@ -1861,7 +1750,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 Annuler
               </button>
               <button type="button" onClick={handleDuplicate}
-                disabled={dupLoading || (dupSelectedIds.size === 0 && !dupIncludeAstreintes && !dupIncludeCreneaux) || (dupTargetDates.length === 0 && !Object.values(dupDays).some(Boolean))}
+                disabled={dupLoading || dupSelectedIds.size === 0 || (dupTargetDates.length === 0 && !Object.values(dupDays).some(Boolean))}
                 className="flex-1 px-3 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2">
                 {dupLoading ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><Copy className="w-3.5 h-3.5" /> Dupliquer</>}
               </button>
