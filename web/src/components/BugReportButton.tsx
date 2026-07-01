@@ -45,7 +45,7 @@ export function BugReportButton({ user }: BugReportButtonProps) {
     if (!titre.trim()) return;
     setSaving(true);
     try {
-      await supabase.from('bugs').insert({
+      const { error } = await supabase.from('bugs').insert({
         user_id: user.id,
         titre: titre.trim(),
         description: note.trim(),
@@ -53,6 +53,9 @@ export function BugReportButton({ user }: BugReportButtonProps) {
         statut: 'open',
         priorite: 'medium',
       });
+      // On ne ferme le modal QUE si l'envoi a reussi, sinon le rapport (parfois
+      // volumineux a cause du screenshot) etait perdu sans aucun retour.
+      if (error) { alert(`Envoi du rapport impossible : ${error.message}`); return; }
       setShowModal(false);
     } finally {
       setSaving(false);

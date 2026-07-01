@@ -327,7 +327,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
             <p className="text-[10px] text-white/70">{chauffeur?.code} - {chauffeur?.prenom} {chauffeur?.nom}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={fetchAll} className="p-2"><RefreshCw size={16} className="text-white" /></button>
+            <button type="button" onClick={() => fetchAll()} className="p-2"><RefreshCw size={16} className="text-white" /></button>
             <button type="button" onClick={() => { clearAuth(); onNavigate('/mobile'); }} className="p-2"><LogOut size={16} className="text-white" /></button>
           </div>
         </div>

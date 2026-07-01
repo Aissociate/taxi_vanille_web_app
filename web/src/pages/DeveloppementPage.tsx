@@ -140,7 +140,7 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
       .from('bugs')
       .select('screenshot_data')
       .eq('id', bugId)
-      .single();
+      .maybeSingle();
     if (data?.screenshot_data) {
       setBugs(prev => prev.map(b => b.id === bugId ? { ...b, screenshot_data: data.screenshot_data } : b));
       setScreenshotModal(data.screenshot_data);
@@ -157,12 +157,14 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
   }
 
   async function updateBugStatut(bugId: string, newStatut: string) {
-    await supabase.from('bugs').update({ statut: newStatut, updated_at: new Date().toISOString() }).eq('id', bugId);
+    const { error, count } = await supabase.from('bugs').update({ statut: newStatut, updated_at: new Date().toISOString() }, { count: 'exact' }).eq('id', bugId);
+    if (error || !count) { alert(`Changement de statut impossible${error ? ' : ' + error.message : ''}`); return; }
     setBugs(bugs.map(b => b.id === bugId ? { ...b, statut: newStatut } : b));
   }
 
   async function updateProposalStatut(proposalId: string, newStatut: string) {
-    await supabase.from('dev_proposals').update({ statut: newStatut }).eq('id', proposalId);
+    const { error, count } = await supabase.from('dev_proposals').update({ statut: newStatut }, { count: 'exact' }).eq('id', proposalId);
+    if (error || !count) { alert(`Changement de statut impossible${error ? ' : ' + error.message : ''}`); return; }
     setProposals(proposals.map(p => p.id === proposalId ? { ...p, statut: newStatut } : p));
   }
 
