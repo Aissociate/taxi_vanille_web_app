@@ -310,6 +310,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [dupSelectedIds, setDupSelectedIds] = useState<Set<string>>(new Set());
   const [dupChauffeurFilter, setDupChauffeurFilter] = useState('');
   const [dupTargetDates, setDupTargetDates] = useState<string[]>([]);
+  const [dupCalMonth, setDupCalMonth] = useState(new Date());
   const [dupIncludeAstreintes, setDupIncludeAstreintes] = useState(false);
   const [dupIncludeCreneaux, setDupIncludeCreneaux] = useState(false);
 
@@ -338,6 +339,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setDupWeeks(1);
     setDupChauffeurFilter('');
     setDupTargetDates([]);
+    setDupCalMonth(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
     setDupIncludeAstreintes(false);
     setDupIncludeCreneaux(false);
     // Pre-select all duplicable courses in current view
@@ -452,9 +454,17 @@ export function PlanningPage({ user }: PlanningPageProps) {
       };
 
       if (dupTargetDates.length > 0) {
+        // En vue Semaine, un jour cible ne recoit que les elements du MEME jour
+        // de semaine (lundi->lundi...) : cocher plusieurs jours reconstitue la
+        // semaine sans tout ecraser sur une seule date. En vue Jour, tout le
+        // jour source est copie sur chaque jour coche (quel que soit le jour).
+        const sameDow = (srcStr: string, target: Date) => parseCourseDate(srcStr).getDay() === target.getDay();
         dupTargetDates.forEach(targetDateStr => {
           const targetDate = new Date(targetDateStr + 'T00:00:00');
-          sourceCourses.forEach(c => {
+          const courseSrc = view === 'semaine' ? sourceCourses.filter(c => sameDow(c.date_heure, targetDate)) : sourceCourses;
+          const astrSrc = view === 'semaine' ? sourceAstreintes.filter(a => sameDow(a.date_debut, targetDate)) : sourceAstreintes;
+          const crenSrc = view === 'semaine' ? sourceCreneaux.filter(cc => sameDow(cc.date_debut, targetDate)) : sourceCreneaux;
+          courseSrc.forEach(c => {
             const srcDate = parseCourseDate(c.date_heure);
             const dupDate = new Date(targetDate);
             dupDate.setHours(srcDate.getHours(), srcDate.getMinutes(), 0, 0);
@@ -470,8 +480,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
               is_brouillon: true,
             });
           });
-          sourceAstreintes.forEach(a => buildAstreinte(a, daysToTarget(a.date_debut, targetDate)));
-          sourceCreneaux.forEach(cc => buildCreneau(cc, daysToTarget(cc.date_debut, targetDate)));
+          astrSrc.forEach(a => buildAstreinte(a, daysToTarget(a.date_debut, targetDate)));
+          crenSrc.forEach(cc => buildCreneau(cc, daysToTarget(cc.date_debut, targetDate)));
         });
       } else {
         const startDate = new Date(currentDate);
@@ -1753,6 +1763,24 @@ export function PlanningPage({ user }: PlanningPageProps) {
           : duplicable;
         const chauffeurIdsInView = [...new Set(duplicable.map(c => c.chauffeur_id).filter(Boolean))];
 
+        // Calendrier jour-par-jour (cible de duplication). Les jours cochés
+        // alimentent dupTargetDates ('YYYY-MM-DD'), gérés par handleDuplicate.
+        const calFirst = new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth(), 1);
+        const calDays: Date[] = [];
+        for (let d = new Date(calFirst); d.getMonth() === calFirst.getMonth(); d.setDate(d.getDate() + 1)) calDays.push(new Date(d));
+        const leadBlanks = (calFirst.getDay() || 7) - 1; // lundi = 0
+        const dupWeekStart = getMonday(currentDate);
+        const dupWeekEnd = new Date(dupWeekStart); dupWeekEnd.setDate(dupWeekEnd.getDate() + 7);
+        const isSourceDay = (d: Date) => view === 'jour' ? isSameDay(d, currentDate) : (d >= dupWeekStart && d < dupWeekEnd);
+        const toggleDay = (d: Date) => {
+          const key = toLocalDateStr(d);
+          setDupTargetDates(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key].sort());
+        };
+        const selectMonthWeekdays = () => {
+          const keys = calDays.filter(d => !isSourceDay(d) && d.getDay() >= 1 && d.getDay() <= 5).map(toLocalDateStr);
+          setDupTargetDates(prev => Array.from(new Set([...prev, ...keys])).sort());
+        };
+
         return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col">
@@ -1804,7 +1832,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           setDupSelectedIds(next);
                         }} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
                         <div className="flex-1 min-w-0">
-                          <span className="text-xs font-medium text-gray-800">{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span className="text-xs font-medium text-gray-800">{view === 'semaine' ? <span className="text-amber-600 capitalize mr-1">{parseCourseDate(c.date_heure).toLocaleDateString('fr-FR', { weekday: 'short' })}</span> : null}{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
                           <span className="text-xs text-gray-500 ml-2">{c.depart} → {c.arrivee}</span>
                         </div>
                         <span className="text-[10px] text-gray-400">{ch?.code || ''}</span>
@@ -1833,69 +1861,78 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 </div>
               </div>
 
-              {/* Step 2: Target */}
+              {/* Step 2: Target - calendrier jour par jour a cocher */}
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase mb-2 block">2. Ou dupliquer ?</label>
-                <div className="space-y-3">
-                  {/* Specific dates */}
-                  <div>
-                    <label className="text-[11px] text-gray-600 font-medium mb-1 block">Dates specifiques (optionnel)</label>
-                    <input
-                      type="date"
-                      className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-amber-500 outline-none"
-                      onChange={(e) => {
-                        if (e.target.value && !dupTargetDates.includes(e.target.value)) {
-                          setDupTargetDates(prev => [...prev, e.target.value].sort());
-                        }
-                        e.target.value = '';
-                      }}
-                    />
-                    {dupTargetDates.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {dupTargetDates.map(d => (
-                          <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-medium">
-                            {new Date(d + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: 'short' })}
-                            <button type="button" onClick={() => setDupTargetDates(prev => prev.filter(x => x !== d))} className="text-amber-400 hover:text-red-500">
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        ))}
-                        <button type="button" onClick={() => setDupTargetDates([])} className="text-[10px] text-gray-400 hover:text-red-500">Vider</button>
-                      </div>
-                    )}
-                  </div>
-
-                  {dupTargetDates.length === 0 && (
-                    <>
-                      <div className="border-t border-gray-100 pt-3">
-                        <label className="text-[11px] text-gray-600 font-medium mb-1.5 block">Ou repetition par semaine</label>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {([
-                            { key: 'lun', label: 'Lu' }, { key: 'mar', label: 'Ma' },
-                            { key: 'mer', label: 'Me' }, { key: 'jeu', label: 'Je' },
-                            { key: 'ven', label: 'Ve' }, { key: 'sam', label: 'Sa' },
-                            { key: 'dim', label: 'Di' }, { key: 'ferie', label: 'Fer' },
-                          ] as const).map(d => (
-                            <button key={d.key} type="button" onClick={() => setDupDays(prev => ({ ...prev, [d.key]: !prev[d.key] }))}
-                              className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${dupDays[d.key] ? 'bg-amber-600 text-white border-amber-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'}`}>
-                              {d.label}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="flex items-center gap-3 mt-2">
-                          <input type="range" min={1} max={12} value={dupWeeks} onChange={(e) => setDupWeeks(parseInt(e.target.value))} className="flex-1 accent-amber-600" />
-                          <span className="text-xs font-bold text-gray-700 w-20 text-right">{dupWeeks} sem.</span>
-                        </div>
-                      </div>
-                    </>
-                  )}
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">2. Dupliquer vers quels jours ?</label>
+                  <span className="text-[10px] text-gray-400">{dupTargetDates.length} jour(s) coche(s)</span>
                 </div>
+                <div className="border border-gray-200 rounded-lg p-3">
+                  {/* Navigation mois */}
+                  <div className="flex items-center justify-between mb-2">
+                    <button type="button" onClick={() => setDupCalMonth(new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth() - 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft className="w-4 h-4" /></button>
+                    <span className="text-xs font-semibold text-gray-700 capitalize">{dupCalMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}</span>
+                    <button type="button" onClick={() => setDupCalMonth(new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth() + 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronRight className="w-4 h-4" /></button>
+                  </div>
+                  {/* Entetes jours */}
+                  <div className="grid grid-cols-7 gap-1 mb-1">
+                    {['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'].map(w => (
+                      <div key={w} className="text-center text-[9px] font-semibold text-gray-400 uppercase">{w}</div>
+                    ))}
+                  </div>
+                  {/* Grille des jours */}
+                  <div className="grid grid-cols-7 gap-1">
+                    {Array.from({ length: leadBlanks }).map((_, i) => <div key={`b${i}`} />)}
+                    {calDays.map(d => {
+                      const key = toLocalDateStr(d);
+                      const checked = dupTargetDates.includes(key);
+                      const source = isSourceDay(d);
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          disabled={source}
+                          onClick={() => toggleDay(d)}
+                          title={source ? 'Jour source (non duplicable sur lui-meme)' : ''}
+                          className={`relative h-8 rounded text-[11px] font-medium border transition-colors flex items-center justify-center ${
+                            source
+                              ? 'bg-gray-100 text-gray-300 border-gray-100 cursor-not-allowed'
+                              : checked
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-amber-300'
+                          }`}
+                        >
+                          {d.getDate()}
+                          {checked && <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-white rounded-full" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Actions rapides */}
+                  <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-100">
+                    <button type="button" onClick={selectMonthWeekdays} className="text-[10px] text-amber-600 font-medium hover:underline">Lun–Ven du mois</button>
+                    <button type="button" onClick={() => setDupTargetDates([])} className="text-[10px] text-gray-500 font-medium hover:underline">Tout decocher</button>
+                  </div>
+                </div>
+                {/* Recap des jours coches */}
+                {dupTargetDates.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {dupTargetDates.map(d => (
+                      <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-medium">
+                        {new Date(d + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: 'short' })}
+                        <button type="button" onClick={() => setDupTargetDates(prev => prev.filter(x => x !== d))} className="text-amber-400 hover:text-red-500">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Summary */}
               <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
                 <p className="text-xs font-medium text-amber-800">
-                  {dupSelectedIds.size} course(s){dupIncludeAstreintes ? ` + ${getDuplicableAstreintes().length} astreinte(s)` : ''}{dupIncludeCreneaux ? ` + ${getDuplicableCreneaux().length} creneau(x)` : ''} × {dupTargetDates.length > 0 ? `${dupTargetDates.length} date(s)` : `${Object.values(dupDays).filter(Boolean).length} jour(s)/sem × ${dupWeeks} sem.`}
+                  {dupSelectedIds.size} course(s){dupIncludeAstreintes ? ` + ${getDuplicableAstreintes().length} astreinte(s)` : ''}{dupIncludeCreneaux ? ` + ${getDuplicableCreneaux().length} creneau(x)` : ''} × {dupTargetDates.length} jour(s) coche(s)
                   {' '}→ crees en <span className="font-bold">brouillon</span>
                 </p>
               </div>
@@ -1906,7 +1943,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 Annuler
               </button>
               <button type="button" onClick={handleDuplicate}
-                disabled={dupLoading || (dupSelectedIds.size === 0 && !dupIncludeAstreintes && !dupIncludeCreneaux) || (dupTargetDates.length === 0 && !Object.values(dupDays).some(Boolean))}
+                disabled={dupLoading || (dupSelectedIds.size === 0 && !dupIncludeAstreintes && !dupIncludeCreneaux) || dupTargetDates.length === 0}
                 className="flex-1 px-3 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2">
                 {dupLoading ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><Copy className="w-3.5 h-3.5" /> Dupliquer</>}
               </button>
