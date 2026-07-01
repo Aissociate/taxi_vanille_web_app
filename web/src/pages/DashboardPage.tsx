@@ -47,6 +47,7 @@ export function DashboardPage() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [executions, setExecutions] = useState<Array<{ id: string; course_id: string; heure_debut: string; heure_fin: string | null }>>([]);
   const [arretExecs, setArretExecs] = useState<Array<{ id: string; course_execution_id: string; montants: number; descendants: number }>>([]);
+  const [tarifPlages, setTarifPlages] = useState<Array<{ type_jour: string; heure_debut: string; heure_fin: string; tarif: number; ligne_id: string | null }>>([]);
   const [showBanner, setShowBanner] = useState(true);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -89,7 +90,7 @@ export function DashboardPage() {
     setLoading(true);
     setFetchError(null);
     try {
-      const [cRes, prevRes, chRes, lRes, incRes, execRes] = await Promise.all([
+      const [cRes, prevRes, chRes, lRes, incRes, execRes, tpRes] = await Promise.all([
         supabase.from('courses')
           .select('id, date_heure, statut_realisation, statut, chauffeur_id, montant, duree_minutes, notes, ligne_id')
           .gte('date_heure', periodStart.toISOString())
@@ -109,9 +110,10 @@ export function DashboardPage() {
           .select('id, course_id, heure_debut, heure_fin')
           .gte('heure_debut', periodStart.toISOString())
           .lte('heure_debut', periodEnd.toISOString()),
+        supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif, ligne_id'),
       ]);
 
-      const hasError = [cRes, prevRes, chRes, lRes, incRes, execRes].some(r => r.error);
+      const hasError = [cRes, prevRes, chRes, lRes, incRes, execRes, tpRes].some(r => r.error);
       if (hasError) {
         setFetchError('Erreur de chargement des donnees depuis le serveur.');
       }
@@ -134,6 +136,7 @@ export function DashboardPage() {
       setIncidents(incRes.data || []);
       setExecutions(execData);
       setArretExecs(arretData);
+      setTarifPlages(tpRes.data || []);
     } catch (err) {
       console.error('Dashboard load error:', err);
       setFetchError('Impossible de charger les donnees. Verifiez votre connexion.');
@@ -152,6 +155,29 @@ export function DashboardPage() {
     return prevCourses.filter(c => c.ligne_id === selectedLigne);
   }, [prevCourses, selectedLigne]);
 
+  // CA d'une course = montant saisi si > 0, sinon le tarif de la plage horaire
+  // correspondante (regle metier, alignee sur ChauffeurDetail). Sans ce repli, la
+  // plupart des courses (tarifees par plage, montant=0) donnaient un CA quasi nul.
+  const tarifForCourse = useMemo(() => {
+    const toMin = (hhmm: string) => { const [h, mi] = (hhmm || '00:00').split(':').map(Number); return (h || 0) * 60 + (mi || 0); };
+    return (c: CourseRow): number => {
+      if (c.montant && c.montant > 0) return c.montant;
+      const d = new Date(c.date_heure);
+      if (isNaN(d.getTime())) return 0;
+      const dow = d.getDay();
+      const typeJour = dow === 6 ? 'samedi' : dow === 0 ? 'dimanche' : 'lun_ven';
+      const minutes = d.getHours() * 60 + d.getMinutes();
+      const matches = (p: { type_jour: string; heure_debut: string; heure_fin: string }) => {
+        if (p.type_jour !== typeJour) return false;
+        const start = toMin(p.heure_debut), end = toMin(p.heure_fin);
+        return start <= end ? (minutes >= start && minutes < end) : (minutes >= start || minutes < end);
+      };
+      const plage = tarifPlages.find(p => matches(p) && p.ligne_id === c.ligne_id)
+        || tarifPlages.find(p => matches(p) && !p.ligne_id);
+      return parseFloat(String(plage?.tarif ?? 0)) || 0;
+    };
+  }, [tarifPlages]);
+
   const coursesRealisees = filteredCourses.filter(c => c.statut_realisation === 'termine');
   const prevCoursesRealisees = filteredPrevCourses.filter(c => c.statut_realisation === 'termine');
   const coursesNonEffectuees = filteredCourses.filter(c =>
@@ -160,17 +186,28 @@ export function DashboardPage() {
     c.statut_realisation === 'remplace'
   );
 
-  const ca = coursesRealisees.reduce((s, c) => s + (c.montant || 0), 0);
-  const prevCa = prevCoursesRealisees.reduce((s, c) => s + (c.montant || 0), 0);
+  const ca = coursesRealisees.reduce((s, c) => s + tarifForCourse(c), 0);
+  const prevCa = prevCoursesRealisees.reduce((s, c) => s + tarifForCourse(c), 0);
   const caVariation = prevCa > 0 ? ((ca - prevCa) / prevCa * 100) : 0;
 
   const nbCoursesRealisees = coursesRealisees.length;
   const prevNbCourses = prevCoursesRealisees.length;
 
+  // Ponctualite = retard REEL au depart (heure_debut d'execution vs heure planifiee),
+  // et non la duree du trajet (duree_minutes) qui donnait ~0% en permanence.
   const SEUIL_RETARD = 10;
-  const coursesAvecDuree = coursesRealisees.filter(c => c.duree_minutes != null);
-  const retards = coursesAvecDuree.filter(c => (c.duree_minutes || 0) > SEUIL_RETARD);
-  const ponctualite = coursesAvecDuree.length > 0 ? ((coursesAvecDuree.length - retards.length) / coursesAvecDuree.length * 100) : -1;
+  const execByCourse = useMemo(() => {
+    const m = new Map<string, string>();
+    executions.forEach(e => { if (e.heure_debut && !m.has(e.course_id)) m.set(e.course_id, e.heure_debut); });
+    return m;
+  }, [executions]);
+  const coursesAvecDepart = coursesRealisees.filter(c => execByCourse.has(c.id));
+  const retards = coursesAvecDepart.filter(c => {
+    const debut = new Date(execByCourse.get(c.id)!).getTime();
+    const prevu = new Date(c.date_heure).getTime();
+    return (debut - prevu) / 60000 > SEUIL_RETARD;
+  });
+  const ponctualite = coursesAvecDepart.length > 0 ? ((coursesAvecDepart.length - retards.length) / coursesAvecDepart.length * 100) : -1;
 
   const incidentsOuverts = incidents.filter(c => {
     const d = new Date(c.date_heure);
@@ -184,10 +221,10 @@ export function DashboardPage() {
     coursesRealisees.forEach(c => {
       const dt = new Date(c.date_heure);
       const dayIdx = (dt.getDay() + 6) % 7;
-      map[days[dayIdx]] += (c.montant || 0);
+      map[days[dayIdx]] += tarifForCourse(c);
     });
     return days.map(d => ({ jour: d, montant: map[d] }));
-  }, [coursesRealisees]);
+  }, [coursesRealisees, tarifForCourse]);
 
   // Donnees du graphique CA. En mode "Jour" on decoupe par heure (le titre
   // annoncait deja "Heures" mais l'agregation restait par jour de semaine).
@@ -196,7 +233,7 @@ export function DashboardPage() {
       const map: Record<number, number> = {};
       coursesRealisees.forEach(c => {
         const h = new Date(c.date_heure).getHours();
-        map[h] = (map[h] || 0) + (c.montant || 0);
+        map[h] = (map[h] || 0) + tarifForCourse(c);
       });
       const heures = Object.keys(map).map(Number);
       let startH = 6;
@@ -210,7 +247,7 @@ export function DashboardPage() {
       return arr;
     }
     return caParJour.map(d => ({ label: d.jour, montant: d.montant }));
-  }, [period, coursesRealisees, caParJour]);
+  }, [period, coursesRealisees, caParJour, tarifForCourse]);
 
   const maxCa = Math.max(...chartData.map(d => d.montant), 1);
 

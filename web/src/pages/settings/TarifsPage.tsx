@@ -51,8 +51,10 @@ const TABS: { key: TypeJour; label: string }[] = [
   { key: 'astreinte', label: 'Astreinte' },
 ];
 
-const HEURES = Array.from({ length: 37 }, (_, i) => {
-  const h = Math.floor(i / 2) + 4;
+// Toutes les demi-heures sur 24h (00:00 -> 23:30) pour pouvoir definir des plages
+// de nuit (ex. 21:00 -> 05:00) que l'ancienne plage 04:00-22:00 interdisait.
+const HEURES = Array.from({ length: 48 }, (_, i) => {
+  const h = Math.floor(i / 2);
   const m = i % 2 === 0 ? '00' : '30';
   return `${h.toString().padStart(2, '0')}:${m}`;
 });
@@ -65,9 +67,33 @@ export function TarifsPage({ user }: TarifsPageProps) {
   const [lignes, setLignes] = useState<Ligne[]>([]);
   const [selectedLigne, setSelectedLigne] = useState<string>('all');
   const [loading, setLoading] = useState(true);
-  const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Sauvegardes accumulees par (table, id) : evite qu'editer un 2e champ dans le
+  // delai de debounce annule la sauvegarde du 1er (l'ancien saveTimeout partage
+  // ecrasait la sauvegarde precedente et savePlageNow ne s'executait meme pas).
+  const pendingUpdates = useRef<Map<string, { table: string; id: string; updates: Record<string, unknown> }>>(new Map());
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function flushUpdates() {
+    if (flushTimer.current) { clearTimeout(flushTimer.current); flushTimer.current = null; }
+    const items = Array.from(pendingUpdates.current.values());
+    pendingUpdates.current.clear();
+    for (const it of items) {
+      const { error } = await supabase.from(it.table).update(it.updates).eq('id', it.id);
+      if (error) alert(`Erreur d'enregistrement (${it.table}) : ${error.message}`);
+    }
+  }
+
+  function scheduleUpdate(table: string, id: string, updates: Record<string, unknown>) {
+    const key = `${table}:${id}`;
+    const existing = pendingUpdates.current.get(key);
+    pendingUpdates.current.set(key, { table, id, updates: { ...(existing?.updates || {}), ...updates } });
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = setTimeout(() => { flushUpdates(); }, 600);
+  }
 
   useEffect(() => { loadAll(); }, []);
+  // Flush les sauvegardes en attente si l'utilisateur quitte la page.
+  useEffect(() => () => { if (pendingUpdates.current.size) flushUpdates(); }, []);
 
   async function loadAll() {
     setLoading(true);
@@ -84,12 +110,6 @@ export function TarifsPage({ user }: TarifsPageProps) {
     setLoading(false);
   }
 
-  // Debounced save helper
-  function debouncedSave(fn: () => Promise<void>, delay = 600) {
-    if (saveTimeout.current) clearTimeout(saveTimeout.current);
-    saveTimeout.current = setTimeout(fn, delay);
-  }
-
   // Plages - local state update + debounced save
   const currentPlages = plages.filter(p => {
     if (p.type_jour !== activeTab) return false;
@@ -102,7 +122,9 @@ export function TarifsPage({ user }: TarifsPageProps) {
     currentPlages.forEach(p => {
       const [h1, m1] = p.heure_debut.split(':').map(Number);
       const [h2, m2] = p.heure_fin.split(':').map(Number);
-      totalMinutes += (h2 * 60 + m2) - (h1 * 60 + m1);
+      let diff = (h2 * 60 + m2) - (h1 * 60 + m1);
+      if (diff < 0) diff += 24 * 60; // plage chevauchant minuit (ex. 21:00 -> 05:00)
+      totalMinutes += diff;
     });
     return totalMinutes / 60;
   }
@@ -126,18 +148,19 @@ export function TarifsPage({ user }: TarifsPageProps) {
 
   function updatePlageLocal(id: string, updates: Partial<Plage>) {
     setPlages(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
-    debouncedSave(async () => {
-      await supabase.from('tarif_plages').update(updates).eq('id', id);
-    });
+    scheduleUpdate('tarif_plages', id, updates);
   }
 
-  function savePlageNow(id: string, updates: Partial<Plage>) {
-    if (saveTimeout.current) clearTimeout(saveTimeout.current);
-    supabase.from('tarif_plages').update(updates).eq('id', id);
+  // onBlur : force la sauvegarde immediate (l'ancienne version n'awaitait pas la
+  // requete PostgREST -> elle n'etait jamais envoyee et le tarif restait a l'ancien).
+  async function savePlageNow(id: string, updates: Partial<Plage>) {
+    scheduleUpdate('tarif_plages', id, updates);
+    await flushUpdates();
   }
 
   async function deletePlage(id: string) {
-    await supabase.from('tarif_plages').delete().eq('id', id);
+    const { error } = await supabase.from('tarif_plages').delete().eq('id', id);
+    if (error) { alert(`Suppression impossible : ${error.message}`); return; }
     setPlages(plages.filter(p => p.id !== id));
   }
 
@@ -148,15 +171,15 @@ export function TarifsPage({ user }: TarifsPageProps) {
 
   function updateFraisLocal(cle: string, updates: Partial<Frais>) {
     setFrais(prev => prev.map(f => f.cle === cle ? { ...f, ...updates } : f));
-    debouncedSave(async () => {
-      const existing = frais.find(f => f.cle === cle);
-      if (existing?.id) {
-        await supabase.from('tarif_frais').update(updates).eq('id', existing.id);
-      } else {
-        await supabase.from('tarif_frais').insert({ cle, valeur: 0, actif: true, periode: '', description: '', user_id: user.id, ...updates });
-        loadAll();
-      }
-    });
+    const existing = frais.find(f => f.cle === cle);
+    if (existing?.id) {
+      scheduleUpdate('tarif_frais', existing.id, updates);
+    } else {
+      // Premier enregistrement de ce frais : insertion immediate (rare).
+      supabase.from('tarif_frais')
+        .insert({ cle, valeur: 0, actif: true, periode: '', description: '', user_id: user.id, ...updates })
+        .then(({ error }) => { if (error) alert(`Erreur : ${error.message}`); else loadAll(); });
+    }
   }
 
   async function toggleFrais(cle: string, actif: boolean, defaultValeur: number, periode: string) {
@@ -184,13 +207,12 @@ export function TarifsPage({ user }: TarifsPageProps) {
 
   function updateTrancheKmLocal(id: string, updates: Partial<TrancheKm>) {
     setTranchesKm(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    debouncedSave(async () => {
-      await supabase.from('tarif_km').update(updates).eq('id', id);
-    });
+    scheduleUpdate('tarif_km', id, updates);
   }
 
   async function deleteTrancheKm(id: string) {
-    await supabase.from('tarif_km').delete().eq('id', id);
+    const { error } = await supabase.from('tarif_km').delete().eq('id', id);
+    if (error) { alert(`Suppression impossible : ${error.message}`); return; }
     setTranchesKm(tranchesKm.filter(t => t.id !== id));
   }
 
@@ -335,7 +357,7 @@ export function TarifsPage({ user }: TarifsPageProps) {
                   <input
                     type="number"
                     step="0.01"
-                    value={forfaitLocation?.valeur || 180}
+                    value={forfaitLocation?.valeur ?? 180}
                     onChange={(e) => updateFraisLocal('forfait_location', { valeur: parseFloat(e.target.value) || 0 })}
                     className="w-24 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none"
                   />
@@ -355,7 +377,7 @@ export function TarifsPage({ user }: TarifsPageProps) {
                 </select>
               </div>
               <span className="text-sm text-gray-400 mt-5">
-                = {forfaitLocation?.periode === 'mois' ? ((forfaitLocation?.valeur || 180) / 30).toFixed(2) : forfaitLocation?.periode === 'jour' ? (forfaitLocation?.valeur || 180).toFixed(2) : ((forfaitLocation?.valeur || 180) / 7).toFixed(2)} EUR/j
+                = {forfaitLocation?.periode === 'mois' ? ((forfaitLocation?.valeur ?? 180) / 30).toFixed(2) : forfaitLocation?.periode === 'jour' ? (forfaitLocation?.valeur ?? 180).toFixed(2) : ((forfaitLocation?.valeur ?? 180) / 7).toFixed(2)} EUR/j
               </span>
             </div>
           )}
@@ -372,7 +394,7 @@ export function TarifsPage({ user }: TarifsPageProps) {
               <input
                 type="number"
                 step="0.01"
-                value={fraisGestion?.valeur || 30}
+                value={fraisGestion?.valeur ?? 30}
                 onChange={(e) => updateFraisLocal('frais_gestion', { valeur: parseFloat(e.target.value) || 0 })}
                 className="w-20 px-2 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none"
               />

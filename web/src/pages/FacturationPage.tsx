@@ -373,7 +373,9 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (chauffeurId && !facture) {
+    // On recharge aussi pour une facture EXISTANTE : sinon les compteurs de
+    // trajets restaient a 0 et re-enregistrer ecrasait la facture avec un net a 0.
+    if (chauffeurId) {
       loadCoursesAndDefaults();
     }
   }, [chauffeurId, moisReference]);
@@ -385,14 +387,18 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     const [y, m] = moisReference.slice(0, 7).split('-').map(Number);
     const lastDay = new Date(y, m, 0).getDate();
     const moisEnd = `${y}-${String(m).padStart(2, '0')}-${lastDay}`;
+    // Bornes des courses en instant LOCAL (mois de Mayotte) et non en UTC naif,
+    // sinon une course du 1er a 01:30 locale basculait sur le mois precedent.
+    const debutInstant = new Date(y, m - 1, 1).toISOString();
+    const finInstant = new Date(y, m, 1).toISOString(); // 1er du mois suivant, exclu
 
     const [coursesRes, kmRes, plagesRes, avancesRes, kmAndroidRes] = await Promise.all([
       supabase.from('courses')
         .select('id, date_heure, periode, statut_planification, statut_realisation, duree_minutes, depart, arrivee, ligne_id, lignes(nom)')
         .eq('chauffeur_id', chauffeurId)
         .eq('statut_realisation', 'termine')
-        .gte('date_heure', moisStart + 'T00:00:00')
-        .lte('date_heure', moisEnd + 'T23:59:59')
+        .gte('date_heure', debutInstant)
+        .lt('date_heure', finInstant)
         .order('date_heure', { ascending: true }),
       supabase.from('chauffeur_kilometres')
         .select('km_debut, km_fin')
@@ -411,33 +417,37 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         .order('created_at', { ascending: true }),
     ]);
 
-    // Android driver readings (table kilometrage) are the live source of
-    // truth; the legacy chauffeur_kilometres table is only a fallback.
-    if (kmAndroidRes.data && kmAndroidRes.data.length > 0) {
-      const debut = kmAndroidRes.data.find(k => k.type === 'debut_mois');
-      const fin = kmAndroidRes.data.find(k => k.type === 'fin_mois');
-      if (debut) setKmDebutMois(debut.km_value);
-      if (fin) setKmFinMois(fin.km_value);
-    } else if (kmRes.data) {
-      setKmDebutMois(kmRes.data.km_debut || 0);
-      setKmFinMois(kmRes.data.km_fin || 0);
+    // Valeurs par defaut : uniquement pour une NOUVELLE facture. Pour une facture
+    // existante on conserve ce qui a ete saisi/enregistre (deja charge via facture?.*).
+    if (!facture) {
+      // Android driver readings (table kilometrage) are the live source of
+      // truth; the legacy chauffeur_kilometres table is only a fallback.
+      if (kmAndroidRes.data && kmAndroidRes.data.length > 0) {
+        const debut = kmAndroidRes.data.find(k => k.type === 'debut_mois');
+        const fin = kmAndroidRes.data.find(k => k.type === 'fin_mois');
+        if (debut) setKmDebutMois(debut.km_value);
+        if (fin) setKmFinMois(fin.km_value);
+      } else if (kmRes.data) {
+        setKmDebutMois(kmRes.data.km_debut || 0);
+        setKmFinMois(kmRes.data.km_fin || 0);
+      }
+
+      // Calculate solde avances en cours
+      const totalAvances = (avancesRes.data || []).reduce((s, a) => s + (a.montant || 0), 0);
+      setSoldeAvanceAvant(totalAvances);
+
+      // Load tarif defaults
+      const locationTarif = tarifs.find(t => t.cle === 'forfait_location');
+      const fraisTarif = tarifs.find(t => t.cle === 'frais_gestion');
+      const kmSeuil = tarifs.find(t => t.cle === 'seuil_km');
+      const kmTarif = tarifs.find(t => t.cle === 'tarif_km_depassement');
+      const heureAstreinteTarif = tarifs.find(t => t.cle === 'tarif_heure_astreinte');
+      if (locationTarif) setTarifLocation(locationTarif.valeur);
+      if (fraisTarif) { setTarifFraisGestion(fraisTarif.valeur); setFraisGestion(fraisTarif.actif); }
+      if (kmSeuil) setSeuilKm(kmSeuil.valeur);
+      if (kmTarif) setTarifKmDepassement(kmTarif.valeur);
+      if (heureAstreinteTarif) setTarifHeureAstreinte(heureAstreinteTarif.valeur);
     }
-
-    // Calculate solde avances en cours
-    const totalAvances = (avancesRes.data || []).reduce((s, a) => s + (a.montant || 0), 0);
-    setSoldeAvanceAvant(totalAvances);
-
-    // Load tarif defaults
-    const locationTarif = tarifs.find(t => t.cle === 'forfait_location');
-    const fraisTarif = tarifs.find(t => t.cle === 'frais_gestion');
-    const kmSeuil = tarifs.find(t => t.cle === 'seuil_km');
-    const kmTarif = tarifs.find(t => t.cle === 'tarif_km_depassement');
-    const heureAstreinteTarif = tarifs.find(t => t.cle === 'tarif_heure_astreinte');
-    if (locationTarif) setTarifLocation(locationTarif.valeur);
-    if (fraisTarif) { setTarifFraisGestion(fraisTarif.valeur); setFraisGestion(fraisTarif.actif); }
-    if (kmSeuil) setSeuilKm(kmSeuil.valeur);
-    if (kmTarif) setTarifKmDepassement(kmTarif.valeur);
-    if (heureAstreinteTarif) setTarifHeureAstreinte(heureAstreinteTarif.valeur);
 
     // Build dynamic plage lookup from tarif_plages
     const plages = plagesRes.data || [];
@@ -558,13 +568,31 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       .gte('date', moisStart)
       .lte('date', moisEnd);
 
-    if (astreinteSessions && astreinteSessions.length > 0) {
+    if (!facture && astreinteSessions && astreinteSessions.length > 0) {
       const totalMinutes = astreinteSessions.reduce((sum, s) => {
         if (!s.heure_debut || !s.heure_fin) return sum;
         const dur = (new Date(s.heure_fin).getTime() - new Date(s.heure_debut).getTime()) / 60000;
         return sum + Math.max(0, dur);
       }, 0);
       setNbHeuresAstreinte(parseFloat((totalMinutes / 60).toFixed(1)));
+    }
+
+    // Facture existante : restaurer les compteurs enregistres (JSON notes) et les
+    // tarifs agreges stockes, afin de retrouver la facture telle qu'enregistree
+    // plutot que la version recalculee (qui pourrait avoir change depuis).
+    if (facture) {
+      try {
+        const n = JSON.parse((facture as { notes?: string }).notes || '{}');
+        if (typeof n.semaine_jour === 'number') setNbSemaineJour(n.semaine_jour);
+        if (typeof n.semaine_nuit === 'number') setNbSemaineNuit(n.semaine_nuit);
+        if (typeof n.samedi === 'number') setNbSamedi(n.samedi);
+        if (typeof n.dimanche === 'number') setNbDimanche(n.dimanche);
+        if (typeof n.astreinte === 'number') setNbAstreinte(n.astreinte);
+        if (typeof n.non_planifie === 'number') setNbNonPlanifie(n.non_planifie);
+      } catch { /* notes non JSON : on garde les valeurs recalculees */ }
+      const f = facture as unknown as Record<string, number | undefined>;
+      if (f.tarif_trajet_normal) setTarifSemaineJour(f.tarif_trajet_normal);
+      if (f.tarif_trajet_astreinte) setTarifAstreinte(f.tarif_trajet_astreinte);
     }
     } catch (err) {
       console.error('Facturation load error:', err);
@@ -593,8 +621,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const montantDepassementKm = kmSurplus * tarifKmDepassement;
   const montantLignesSupp = lignesSupp.reduce((s, l) => s + (l.quantite * l.montant), 0);
 
+  // On ne rembourse jamais plus que le solde d'avance restant.
+  const remboursementEffectif = Math.min(remboursementAvance, soldeAvanceAvant);
   const sousTotal = montantSemaineJour + montantSemaineNuit + montantSamedi + montantDimanche + montantAstreinteTrajets + montantHeuresAstreinte + montantNonPlanifie + montantLignesSupp + montantCoordSamedi + montantCoordDimanche;
-  const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementAvance;
+  const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementEffectif;
   const netAPayer = sousTotal - totalDeductions;
 
   const selectedChauffeur = chauffeurs.find(c => c.id === chauffeurId);
@@ -646,9 +676,9 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         tarif_km_depassement: tarifKmDepassement,
         montant_depassement_km: montantDepassementKm,
         lignes_supplementaires: lignesSupp,
-        remboursement_avance: remboursementAvance,
+        remboursement_avance: remboursementEffectif,
         solde_avance_avant: soldeAvanceAvant,
-        solde_avance_apres: Math.max(0, soldeAvanceAvant - remboursementAvance),
+        solde_avance_apres: Math.max(0, soldeAvanceAvant - remboursementEffectif),
         montant_ht: sousTotal,
         montant_ttc: sousTotal,
         tva: 0,
