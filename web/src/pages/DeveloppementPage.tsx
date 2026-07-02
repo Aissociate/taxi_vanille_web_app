@@ -286,7 +286,7 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${statusStyle.bg} ${statusStyle.text}`}>
                           {STATUT_LABELS[bug.statut] || bug.statut}
                         </span>
-                        <span className="text-[10px] text-gray-400">{new Date(bug.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span className="text-[10px] text-gray-400">{new Date(bug.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</span>
                         <span className="text-[10px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{getUserEmail(bug.user_id)}</span>
                       </div>
                       <h3 className="font-semibold text-gray-900 truncate">{bug.titre}</h3>
@@ -374,7 +374,7 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                               <span className={`text-[10px] font-semibold ${r.is_dev ? 'text-blue-600' : 'text-gray-500'}`}>
                                 {r.is_dev ? 'Developpeur' : getUserEmail(r.user_id)}
                               </span>
-                              <span className="text-[10px] text-gray-400">{new Date(r.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                              <span className="text-[10px] text-gray-400">{new Date(r.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</span>
                             </div>
                             <p className="text-sm text-gray-700">{r.message}</p>
                           </div>
@@ -468,7 +468,7 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                           {STATUT_LABELS[p.statut] || p.statut}
                         </span>
                         <span className="text-[10px] text-gray-400">
-                          {new Date(p.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          {new Date(p.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Indian/Mayotte' })}
                         </span>
                         <span className="text-[10px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{getUserEmail(p.user_id)}</span>
                       </div>
@@ -529,7 +529,7 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                                 <span className={`text-[10px] font-semibold ${r.is_dev ? 'text-blue-600' : 'text-gray-500'}`}>
                                   {r.is_dev ? 'Developpeur' : getUserEmail(r.user_id)}
                                 </span>
-                                <span className="text-[10px] text-gray-400">{new Date(r.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                                <span className="text-[10px] text-gray-400">{new Date(r.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</span>
                               </div>
                               <p className="text-sm text-gray-700">{r.message}</p>
                             </div>

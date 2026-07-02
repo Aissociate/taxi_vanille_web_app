@@ -232,7 +232,7 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
             <span className="text-xs font-bold text-red-600">ALERT</span>
           </div>
           <span className="text-[10px] text-gray-400">
-            {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
           </span>
         </div>
 

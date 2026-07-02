@@ -204,14 +204,14 @@ export function IncidentsPage(_props: IncidentsPageProps) {
                   {/* Time */}
                   <div className="text-right flex-shrink-0">
                     <p className="text-xs text-gray-500">
-                      {new Date(incident.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
+                      {new Date(incident.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', timeZone: 'Indian/Mayotte' })}
                     </p>
                     <p className="text-xs font-medium text-gray-700">
-                      {new Date(incident.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(incident.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                     </p>
                     {isHandled && incident.handled_at && (
                       <p className="text-[10px] text-emerald-600 mt-1">
-                        Traite {new Date(incident.handled_at).toLocaleDateString('fr-FR')}
+                        Traite {new Date(incident.handled_at).toLocaleDateString('fr-FR', { timeZone: 'Indian/Mayotte' })}
                       </p>
                     )}
                   </div>
@@ -251,7 +251,7 @@ export function IncidentsPage(_props: IncidentsPageProps) {
                 <div>
                   <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Date/Heure</p>
                   <p className="font-medium text-gray-900">
-                    {new Date(selectedIncident.created_at).toLocaleString('fr-FR')}
+                    {new Date(selectedIncident.created_at).toLocaleString('fr-FR', { timeZone: 'Indian/Mayotte' })}
                   </p>
                 </div>
                 {selectedIncident.latitude != null && selectedIncident.longitude != null && (
@@ -334,7 +334,7 @@ export function IncidentsPage(_props: IncidentsPageProps) {
                   <p className="text-xs text-emerald-700 uppercase font-semibold mb-1">Mesure prise</p>
                   <p className="text-sm text-emerald-900">{selectedIncident.mesure_prise || 'Aucune mesure specifiee'}</p>
                   <p className="text-xs text-emerald-600 mt-2">
-                    Traite le {new Date(selectedIncident.handled_at).toLocaleString('fr-FR')}
+                    Traite le {new Date(selectedIncident.handled_at).toLocaleString('fr-FR', { timeZone: 'Indian/Mayotte' })}
                   </p>
                 </div>
               ) : (

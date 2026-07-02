@@ -1088,7 +1088,7 @@ function CoursesListing({ courses }: { courses: CourseDetail[] }) {
             </div>
             <div className="divide-y divide-gray-50">
               {dayCourses.map(c => {
-                const heure = new Date(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                const heure = new Date(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
                 return (
                   <div key={c.id} className="px-4 py-1.5 flex items-center gap-3 text-xs hover:bg-gray-50/50">
                     <span className="text-gray-400 font-mono w-12">{heure}</span>

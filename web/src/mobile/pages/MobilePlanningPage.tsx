@@ -163,7 +163,7 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       const { data: executions } = await supabase.from('course_executions').select('*').eq('chauffeur_id', chauffeur.id).in('course_id', todayRes.data.map((c) => c.id));
       const merged = todayRes.data.map((course) => ({ ...course, execution: executions?.find((e) => e.course_id === course.id) || null }));
       setCourses(merged as CourseWithDetails[]);
-      setLastSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+      setLastSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' }));
 
       const astreinteCourses = todayRes.data.filter((c: any) => c.is_astreinte === true);
       const todayStr = localDayStr(today);
@@ -257,10 +257,10 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     }
   };
 
-  const formatTime = (dateStr: string) => new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const formatTime = (dateStr: string) => new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
   const formatDate = () => {
     const today = new Date();
-    return today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase();
+    return today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Indian/Mayotte' }).toUpperCase();
   };
 
   if (loading) {
@@ -303,8 +303,8 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
 
   // Astreinte ended
   if (hasAstreinte && astreinteSession?.heure_fin) {
-    const debutTime = new Date(astreinteSession.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    const finTime = new Date(astreinteSession.heure_fin).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const debutTime = new Date(astreinteSession.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
+    const finTime = new Date(astreinteSession.heure_fin).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
     const diffMs = new Date(astreinteSession.heure_fin).getTime() - new Date(astreinteSession.heure_debut).getTime();
     const diffH = Math.floor(diffMs / 3600000);
     const diffM = Math.floor((diffMs % 3600000) / 60000);

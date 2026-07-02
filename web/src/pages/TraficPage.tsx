@@ -214,7 +214,7 @@ export function TraficPage() {
                       </p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <p className="text-xs text-gray-500">
-                          {new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                         </p>
                         {ch && (
                           <span className="text-xs text-gray-400">· {ch.code} - {ch.nom}</span>
@@ -234,9 +234,9 @@ export function TraficPage() {
                               return delayMin > 5 ? 'bg-red-50 text-red-600' : 'bg-gray-100 text-gray-600';
                             })()
                           }`}>
-                            {new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                             {' → '}
-                            {new Date(execution.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(execution.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                             {(() => {
                               const delayMin = Math.round((new Date(execution.heure_debut).getTime() - new Date(course.date_heure).getTime()) / 60000);
                               return delayMin > 5 ? ` (+${delayMin} mn)` : '';
@@ -273,8 +273,8 @@ export function TraficPage() {
                       <p className="section-label">Detail execution par arret</p>
                       {execution && execution.heure_debut && (
                         <span className="text-xs text-gray-500">
-                          Debut: {new Date(execution.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                          {execution.heure_fin && ` → Fin: ${new Date(execution.heure_fin).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
+                          Debut: {new Date(execution.heure_debut).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+                          {execution.heure_fin && ` → Fin: ${new Date(execution.heure_fin).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}`}
                         </span>
                       )}
                     </div>
@@ -287,14 +287,14 @@ export function TraficPage() {
                           <div className="flex-1 flex items-center gap-3">
                             {arret.heure_arrivee && (
                               <span className="text-xs text-gray-500 w-12">
-                                {new Date(arret.heure_arrivee).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                {new Date(arret.heure_arrivee).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                               </span>
                             )}
                             {arret.heure_depart && (
                               <>
                                 <ArrowRight className="w-3 h-3 text-gray-300" />
                                 <span className="text-xs text-gray-500 w-12">
-                                  {new Date(arret.heure_depart).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                  {new Date(arret.heure_depart).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                                 </span>
                               </>
                             )}

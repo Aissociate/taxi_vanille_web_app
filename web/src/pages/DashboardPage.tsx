@@ -63,7 +63,7 @@ export function DashboardPage() {
       pe = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
       prvS = new Date(ps.getTime() - 86400000);
       prvE = new Date(pe.getTime() - 86400000);
-      label = today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+      label = today.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Indian/Mayotte' });
     } else if (period === 'semaine') {
       const day = today.getDay() || 7;
       ps = new Date(today.getFullYear(), today.getMonth(), today.getDate() - day + 1);
@@ -77,7 +77,7 @@ export function DashboardPage() {
       pe = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
       prvS = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       prvE = new Date(today.getFullYear(), today.getMonth(), 0, 23, 59, 59);
-      label = today.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+      label = today.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Indian/Mayotte' });
     }
     return { periodStart: ps, periodEnd: pe, prevStart: prvS, prevEnd: prvE, periodLabel: label };
   }, [period]);
@@ -325,7 +325,7 @@ export function DashboardPage() {
               {latestIncidentChauffeur ? `${latestIncidentChauffeur.code} - ${latestIncidentChauffeur.nom} ${latestIncidentChauffeur.prenom}` : 'Chauffeur inconnu'}
             </span>
             <span className="text-xs text-gray-400">
-              {new Date(latestIncident.date_heure).toLocaleString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+              {new Date(latestIncident.date_heure).toLocaleString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
             </span>
           </div>
           <p className="text-sm text-gray-500 flex-1 truncate">{latestIncident.notes || 'Incident signale'}</p>

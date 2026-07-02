@@ -293,7 +293,7 @@ export function LogsPage({ user }: LogsPageProps) {
                     <p className="text-sm text-gray-600 mt-0.5 truncate">{log.details || 'Aucun detail'}</p>
                     <div className="flex items-center gap-3 mt-2">
                       <span className="text-[11px] text-gray-400">
-                        {new Date(log.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {new Date(log.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                       </span>
                       {log.user_email && (
                         <span className="text-[11px] text-gray-400">

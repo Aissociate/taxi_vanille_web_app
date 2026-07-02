@@ -136,10 +136,8 @@ export function UsersPage({ user }: Props) {
 
   function formatDate(d: string | null) {
     if (!d) return '-';
-    return new Date(d).toLocaleDateString('fr-FR', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-    });
+    return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
   }
 
   return (

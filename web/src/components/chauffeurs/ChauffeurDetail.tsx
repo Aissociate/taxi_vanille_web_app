@@ -164,15 +164,15 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     const d = referenceDate;
     switch (period) {
       case 'jour':
-        return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+        return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Indian/Mayotte' });
       case 'semaine': {
         const day = d.getDay() || 7;
         const mon = new Date(d); mon.setDate(d.getDate() - day + 1);
         const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-        return `${mon.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })} - ${sun.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+        return `${mon.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', timeZone: 'Indian/Mayotte' })} - ${sun.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Indian/Mayotte' })}`;
       }
       case 'mois':
-        return d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+        return d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Indian/Mayotte' });
       case 'annee':
         return String(d.getFullYear());
       default:
@@ -583,11 +583,11 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
               const dureeMin = debut && fin ? Math.round((fin.getTime() - debut.getTime()) / 60000) : null;
               return (
                 <div key={s.id} className="flex items-center gap-4 px-3 py-2 bg-gray-50 rounded-lg text-sm">
-                  <span className="font-medium text-gray-900 w-24">{new Date(s.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}</span>
+                  <span className="font-medium text-gray-900 w-24">{new Date(s.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', timeZone: 'Indian/Mayotte' })}</span>
                   <span className="text-amber-600 font-medium">
-                    {debut?.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) || '-'}
+                    {debut?.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' }) || '-'}
                     {' → '}
-                    {fin?.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) || 'en cours'}
+                    {fin?.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' }) || 'en cours'}
                   </span>
                   {dureeMin !== null && (
                     <span className="text-xs text-gray-500 bg-white px-2 py-0.5 rounded border border-gray-200">{Math.floor(dureeMin / 60)}h{(dureeMin % 60).toString().padStart(2, '0')}</span>
@@ -609,7 +609,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
                 <Gauge className="w-4 h-4 text-gray-400 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{k.km_value.toLocaleString()} km</p>
-                  <p className="text-xs text-gray-500">{k.type} · {k.mois || new Date(k.created_at).toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' })}</p>
+                  <p className="text-xs text-gray-500">{k.type} · {k.mois || new Date(k.created_at).toLocaleDateString('fr-FR', { month: 'short', year: '2-digit', timeZone: 'Indian/Mayotte' })}</p>
                 </div>
               </div>
             ))}
@@ -639,16 +639,16 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
                 <div key={e.id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 text-sm">
                   <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isComplete ? 'bg-emerald-500' : e.statut === 'en_cours' ? 'bg-amber-500' : 'bg-gray-300'}`} />
                   <span className="text-gray-900 font-medium w-20">
-                    {debut.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
+                    {debut.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', timeZone: 'Indian/Mayotte' })}
                   </span>
                   {theorique && (
                     <span className="text-xs text-gray-400 w-14">
-                      {theorique.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                      {theorique.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
                     </span>
                   )}
                   <span className="text-amber-600 font-medium w-28">
-                    {debut.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                    {fin && ` → ${fin.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
+                    {debut.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+                    {fin && ` → ${fin.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}`}
                   </span>
                   {isLate && (
                     <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">+{retardMin}mn</span>
@@ -702,7 +702,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
                 return (
                   <tr key={c.id}>
                     <td className="py-2 font-medium text-gray-900">{jourNoms[d.getDay()]}</td>
-                    <td className="py-2 text-amber-600 font-medium">{d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</td>
+                    <td className="py-2 text-amber-600 font-medium">{d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</td>
                     <td className="py-2 text-gray-600">{c.depart} → {c.arrivee}</td>
                     <td className="py-2">{isRemplacement ? <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium">Remplacement</span> : <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-medium">Programme</span>}</td>
                     <td className={`py-2 text-right font-medium ${statutColors[c.statut_realisation] || 'text-gray-500'}`}>{c.statut_realisation}</td>
@@ -734,7 +734,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
                   <FileText className="w-4 h-4 text-gray-400" />
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-900">{doc.nom}</p>
-                    <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString('fr-FR')}</p>
+                    <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString('fr-FR', { timeZone: 'Indian/Mayotte' })}</p>
                   </div>
                   <button onClick={() => handleDeleteDocument(doc.id)} className="text-gray-400 hover:text-red-500 p-1">
                     <X className="w-3.5 h-3.5" />
@@ -767,7 +767,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
                         {a.statut}
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500">{a.motif} · {new Date(a.date_avance).toLocaleDateString('fr-FR')}</p>
+                    <p className="text-xs text-gray-500">{a.motif} · {new Date(a.date_avance).toLocaleDateString('fr-FR', { timeZone: 'Indian/Mayotte' })}</p>
                   </div>
                   <button onClick={() => handleDeleteAvance(a.id)} className="text-gray-400 hover:text-red-500 p-1">
                     <X className="w-3.5 h-3.5" />

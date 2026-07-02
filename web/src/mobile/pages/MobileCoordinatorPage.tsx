@@ -131,8 +131,8 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     setLoading(false);
   };
 
-  const formatTime = (dateStr: string) => new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-  const formatDate = () => new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase();
+  const formatTime = (dateStr: string) => new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
+  const formatDate = () => new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Indian/Mayotte' }).toUpperCase();
 
   const getIncidentLabel = (type: string) => {
     const labels: Record<string, string> = { accident: 'Accident', panne: 'Panne', retard: 'Retard', voie_bloquee: 'Voie bloquee', passager_refuse: 'Passager refuse', securite: 'Securite', meteo: 'Meteo', client_absent: 'Client absent', autre: 'Autre' };

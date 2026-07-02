@@ -323,7 +323,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
                   </div>
                   <div className="flex-1">
                     <p className="text-sm text-gray-900">{c.depart || '?'} → {c.arrivee || '?'}</p>
-                    <p className="text-xs text-gray-400">{new Date(c.date_heure).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                    <p className="text-xs text-gray-400">{new Date(c.date_heure).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</p>
                   </div>
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.statut === 'terminee' ? 'bg-emerald-50 text-emerald-700' : c.statut === 'annulee' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'}`}>
                     {c.statut}
