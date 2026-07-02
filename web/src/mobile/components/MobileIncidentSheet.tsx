@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { Camera, Video, Mic, Square, X, Check, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { enqueue, isOnline } from '../lib/offlineQueue';
@@ -33,7 +33,13 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioMimeRef = useRef<string>('audio/webm');
+  const audioExtRef = useRef<string>('webm');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // URL de lecture du memo (pour verifier qu'il s'est bien enregistre).
+  const audioUrl = useMemo(() => (audioBlob ? URL.createObjectURL(audioBlob) : null), [audioBlob]);
+  useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
@@ -55,15 +61,36 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
   };
 
   const startRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      alert("L'enregistrement audio n'est pas disponible sur cet appareil/navigateur.");
+      return;
+    }
+    let stream: MediaStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      // Permission refusee, contexte non securise (http), ou micro indisponible.
+      alert("Micro inaccessible. Autorisez le microphone dans les reglages du telephone (et verifiez la connexion securisee) pour enregistrer un memo vocal.");
+      return;
+    }
+    try {
+      // On choisit un format REELLEMENT supporte : Android=webm/opus, iOS=mp4.
+      // Forcer 'audio/webm' partout produisait un fichier illisible sur iOS.
+      const candidates: [string, string][] = [
+        ['audio/webm;codecs=opus', 'webm'], ['audio/webm', 'webm'],
+        ['audio/mp4', 'm4a'], ['audio/aac', 'aac'], ['audio/ogg;codecs=opus', 'ogg'],
+      ];
+      const picked = candidates.find(([t]) => { try { return MediaRecorder.isTypeSupported(t); } catch { return false; } });
+      const mediaRecorder = picked ? new MediaRecorder(stream, { mimeType: picked[0] }) : new MediaRecorder(stream);
+      audioMimeRef.current = mediaRecorder.mimeType || picked?.[0] || 'audio/webm';
+      audioExtRef.current = picked?.[1] || (audioMimeRef.current.includes('mp4') ? 'm4a' : 'webm');
       const chunks: BlobPart[] = [];
 
-      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+      mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        setAudioBlob(blob);
+        const blob = new Blob(chunks, { type: audioMimeRef.current });
+        setAudioBlob(blob.size > 0 ? blob : null);
+        if (blob.size === 0) alert("Le memo n'a pas pu etre enregistre (aucun son capte). Reessayez.");
         stream.getTracks().forEach((t) => t.stop());
       };
 
@@ -74,15 +101,13 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
 
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => {
-          if (prev >= 59) {
-            stopRecording();
-            return 60;
-          }
+          if (prev >= 59) { stopRecording(); return 60; }
           return prev + 1;
         });
       }, 1000);
     } catch {
-      // Microphone access denied
+      stream.getTracks().forEach((t) => t.stop());
+      alert("Enregistrement audio impossible sur cet appareil.");
     }
   };
 
@@ -126,7 +151,7 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
     const mediaField = mediaType === 'video' ? 'video_url' : 'photo_url';
     const mediaExt = mediaFile?.name.split('.').pop() || (mediaType === 'video' ? 'mp4' : 'jpg');
     const mediaPath = `${chauffeurId}/${timestamp}.${mediaExt}`;
-    const audioPath = `${chauffeurId}/${timestamp}.webm`;
+    const audioPath = `${chauffeurId}/${timestamp}.${audioExtRef.current}`;
 
     const incidentData: Record<string, unknown> = {
       course_id: courseId || null,
@@ -295,6 +320,9 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
               {formatTime(isRecording ? recordingTime : (audioBlob ? recordingTime : 0))}
             </span>
           </div>
+          {audioUrl && !isRecording && (
+            <audio src={audioUrl} controls preload="metadata" className="w-full mt-2 h-9" />
+          )}
         </div>
 
         <div className="flex gap-3 mt-4">
@@ -305,12 +333,12 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={!selectedType || sending}
+            disabled={!selectedType || sending || isRecording}
             className={`flex-[2] py-3 rounded-lg font-bold text-white text-center text-lg transition-colors ${
-              selectedType && !sending ? 'bg-red-600 active:bg-red-700' : 'bg-gray-300 text-gray-500'
+              selectedType && !sending && !isRecording ? 'bg-red-600 active:bg-red-700' : 'bg-gray-300 text-gray-500'
             }`}
           >
-            {sending ? '...' : 'ENVOYER'}
+            {sending ? '...' : isRecording ? 'ARRETEZ LE MEMO' : 'ENVOYER'}
           </button>
         </div>
       </div>

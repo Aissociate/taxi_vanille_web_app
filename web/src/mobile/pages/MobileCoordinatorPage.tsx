@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { LogOut, RefreshCw, ArrowLeft, Phone, Info, RotateCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
@@ -46,13 +46,24 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const [availableDrivers, setAvailableDrivers] = useState<Chauffeur[]>([]);
   const [replacingDriver, setReplacingDriver] = useState(false);
   const [hasCreneaux, setHasCreneaux] = useState(false);
+  // Position de scroll a restaurer apres un rafraichissement en arriere-plan.
+  const pendingScrollRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current != null) {
+      window.scrollTo(0, pendingScrollRef.current);
+      pendingScrollRef.current = null;
+    }
+  });
 
   useEffect(() => {
     if (!chauffeur) { onNavigate('/mobile'); return; }
     fetchAll();
-    // Rafraichissements en ARRIERE-PLAN : ne pas remettre le spinner plein ecran
-    // toutes les 30 s (ni a chaque event realtime), sinon on interrompt l'ecran.
-    const interval = setInterval(() => fetchAll(true), 30000);
+    // Rafraichissement en ARRIERE-PLAN toutes les 3 min (le rafraichissement etait
+    // trop frequent). On NE s'abonne plus au realtime `courses` (qui declenchait a
+    // chaque changement de course dans toute l'organisation), seulement aux
+    // incidents (alerte accident) et aux creneaux, qui sont rares.
+    const interval = setInterval(() => fetchAll(true), 180000);
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
@@ -61,7 +72,6 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     };
     const channel = supabase
       .channel(`coordinator_${chauffeur.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'coordinateur_creneaux' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, scheduleRefresh)
       .subscribe();
@@ -97,6 +107,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     ]);
 
     const creneaux = creneauxRes.data || [];
+    // Rafraichissement en arriere-plan : on memorise la position de scroll pour
+    // la restaurer apres le re-rendu (ne pas remonter en haut de l'ecran).
+    if (background) pendingScrollRef.current = window.scrollY;
     setHasCreneaux(creneaux.length > 0);
     // Une course apparait si sa duree CHEVAUCHE le creneau (meme ligne) :
     // [debut course, fin course] ∩ [debut creneau, fin creneau] != vide.
