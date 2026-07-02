@@ -88,13 +88,24 @@ function toLocalDateStr(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function getTimezoneOffsetStr(d: Date): string {
-  const offset = -d.getTimezoneOffset();
-  const sign = offset >= 0 ? '+' : '-';
-  const absOffset = Math.abs(offset);
-  const h = String(Math.floor(absOffset / 60)).padStart(2, '0');
-  const m = String(absOffset % 60).padStart(2, '0');
-  return `${sign}${h}:${m}`;
+// L'exploitation est a Mayotte (UTC+3, SANS changement d'heure). On epingle
+// l'ecriture sur cet offset FIXE, peu importe le fuseau du navigateur qui saisit
+// (metropole, Reunion...) : l'heure tapee est TOUJOURS une heure de Mayotte.
+const MAYOTTE_OFFSET = '+03:00';
+const MAYOTTE_OFFSET_MS = 3 * 3600 * 1000;
+function getTimezoneOffsetStr(_d?: Date): string { return MAYOTTE_OFFSET; }
+
+// "YYYY-MM-DDTHH:MM" (valeur d'un <input datetime-local>, interpretee comme heure
+// de Mayotte) -> instant ISO absolu.
+function mayotteInputToISO(input: string): string {
+  return `${input.slice(0, 16)}:00${MAYOTTE_OFFSET}`;
+}
+// instant ISO -> "YYYY-MM-DDTHH:MM" en heure de Mayotte (pour REMPLIR un input,
+// independamment du fuseau du navigateur). +3h puis lecture des champs UTC.
+function isoToMayotteInput(iso: string): string {
+  const d = new Date(new Date(iso).getTime() + MAYOTTE_OFFSET_MS);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
 function toLocalDateTimeStr(d: Date): string {
@@ -410,13 +421,18 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return coordCreneaux.filter(cc => inCurrentView(cc.date_debut));
   }
 
-  // Decale une plage [debut, fin] de nDays jours en conservant l'heure (mur).
+  // Decale un instant de nDays jours en CONSERVANT l'heure de Mayotte (mur).
+  // On manipule la date via les champs Mayotte pour rester invariant au fuseau
+  // du navigateur (Mayotte n'a pas de changement d'heure -> pas d'ambiguite).
+  function shiftDaysMayotte(iso: string, nDays: number): string {
+    const m = isoToMayotteInput(iso); // "YYYY-MM-DDTHH:MM" en heure de Mayotte
+    const base = new Date(m + ':00Z');
+    base.setUTCDate(base.getUTCDate() + nDays);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return mayotteInputToISO(`${base.getUTCFullYear()}-${p(base.getUTCMonth() + 1)}-${p(base.getUTCDate())}T${m.slice(11, 16)}`);
+  }
   function shiftRange(debutStr: string, finStr: string, nDays: number): { date_debut: string; date_fin: string } {
-    const d = new Date(debutStr);
-    const f = new Date(finStr);
-    d.setDate(d.getDate() + nDays);
-    f.setDate(f.getDate() + nDays);
-    return { date_debut: toLocalDateTimeStrTz(d), date_fin: toLocalDateTimeStrTz(f) };
+    return { date_debut: shiftDaysMayotte(debutStr, nDays), date_fin: shiftDaysMayotte(finStr, nDays) };
   }
 
   // Nombre de jours (entier) entre la date de depart d'un element source et une date cible (minuit local).
@@ -471,11 +487,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
           const astrSrc = view !== 'jour' ? sourceAstreintes.filter(a => sameDow(a.date_debut, targetDate)) : sourceAstreintes;
           const crenSrc = view !== 'jour' ? sourceCreneaux.filter(cc => sameDow(cc.date_debut, targetDate)) : sourceCreneaux;
           courseSrc.forEach(c => {
-            const srcDate = parseCourseDate(c.date_heure);
-            const dupDate = new Date(targetDate);
-            dupDate.setHours(srcDate.getHours(), srcDate.getMinutes(), 0, 0);
+            // On copie l'heure de MAYOTTE de la source sur le jour cible.
+            const srcHHMM = isoToMayotteInput(c.date_heure).slice(11, 16);
             newCourses.push({
-              date_heure: toLocalDateTimeStrTz(dupDate),
+              date_heure: mayotteInputToISO(`${targetDateStr}T${srcHHMM}`),
               depart: c.depart, arrivee: c.arrivee,
               statut_planification: 'planifie', statut_realisation: 'programme',
               montant: c.montant, notes: c.notes, chauffeur_id: c.chauffeur_id,
@@ -748,9 +763,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function openEdit(course: Course) {
-    const d = parseCourseDate(course.date_heure);
     setForm({
-      date_heure: toLocalDateTimeStr(d),
+      // On remplit l'input avec l'heure de MAYOTTE de l'instant stocke (pas
+      // l'heure du navigateur), pour qu'un enregistrement sans changement ne
+      // decale pas l'horaire.
+      date_heure: isoToMayotteInput(course.date_heure),
       depart: course.depart,
       arrivee: course.arrivee,
       statut_planification: course.statut_planification || 'planifie',
@@ -812,14 +829,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function openAstreinteEdit(astreinte: Astreinte) {
-    const debut = new Date(astreinte.date_debut);
-    const fin = new Date(astreinte.date_fin);
     setAstreinteForm({
       chauffeur_id: astreinte.chauffeur_id,
       ligne_id: astreinte.ligne_id,
       coordinateur_id: astreinte.coordinateur_id || '',
-      date_debut: toLocalDateTimeStr(debut),
-      date_fin: toLocalDateTimeStr(fin),
+      date_debut: isoToMayotteInput(astreinte.date_debut),
+      date_fin: isoToMayotteInput(astreinte.date_fin),
       is_brouillon: astreinte.is_brouillon,
       notes: astreinte.notes || '',
     });
@@ -834,8 +849,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
       chauffeur_id: astreinteForm.chauffeur_id,
       ligne_id: astreinteForm.ligne_id,
       coordinateur_id: astreinteForm.coordinateur_id || null,
-      date_debut: toLocalDateTimeStrTz(new Date(astreinteForm.date_debut)),
-      date_fin: toLocalDateTimeStrTz(new Date(astreinteForm.date_fin)),
+      date_debut: mayotteInputToISO(astreinteForm.date_debut),
+      date_fin: mayotteInputToISO(astreinteForm.date_fin),
       is_brouillon: astreinteForm.is_brouillon,
       notes: astreinteForm.notes,
       user_id: user.id,
@@ -877,8 +892,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setCoordForm({
       coordinateur_id: creneau.coordinateur_id,
       ligne_id: creneau.ligne_id,
-      date_debut: toLocalDateTimeStr(new Date(creneau.date_debut)),
-      date_fin: toLocalDateTimeStr(new Date(creneau.date_fin)),
+      date_debut: isoToMayotteInput(creneau.date_debut),
+      date_fin: isoToMayotteInput(creneau.date_fin),
       is_brouillon: creneau.is_brouillon,
       notes: creneau.notes || '',
     });
@@ -892,8 +907,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const payload = {
       coordinateur_id: coordForm.coordinateur_id,
       ligne_id: coordForm.ligne_id,
-      date_debut: toLocalDateTimeStrTz(new Date(coordForm.date_debut)),
-      date_fin: toLocalDateTimeStrTz(new Date(coordForm.date_fin)),
+      date_debut: mayotteInputToISO(coordForm.date_debut),
+      date_fin: mayotteInputToISO(coordForm.date_fin),
       is_brouillon: coordForm.is_brouillon,
       notes: coordForm.notes,
       user_id: user.id,
@@ -919,10 +934,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const formDate = new Date(form.date_heure);
     const payload = {
       ...form,
-      date_heure: toLocalDateTimeStrTz(formDate),
+      // L'heure saisie est une heure de Mayotte (offset fixe), pas l'heure du
+      // navigateur du planificateur (qui peut etre en metropole/Reunion).
+      date_heure: mayotteInputToISO(form.date_heure),
       chauffeur_id: form.chauffeur_id || null,
       client_id: form.client_id || null,
       ligne_id: form.ligne_id || null,
