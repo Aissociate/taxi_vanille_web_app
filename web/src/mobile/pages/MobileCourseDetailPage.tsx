@@ -6,6 +6,7 @@ import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue
 import { getCurrentPosition, requestLocationPermission } from '../lib/native';
 import MobileIncidentSheet from '../components/MobileIncidentSheet';
 import type { Course, CourseExecution, LigneArret } from '../lib/types';
+import { mParts } from '../../lib/mayotte';
 
 type Step = 'preview' | 'depart' | 'arrivee';
 
@@ -171,12 +172,10 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
 
     let montant = 0;
     if (isOnline() && course?.date_heure) {
-      const d = new Date(course.date_heure);
-      const dow = d.getDay();
-      let typeJour = 'lun_ven';
-      if (dow === 6) typeJour = 'samedi';
-      else if (dow === 0) typeJour = 'dimanche';
-      const heure = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+      // Jour/heure evalues en heure de MAYOTTE (pas le fuseau du telephone).
+      const mp = mParts(course.date_heure);
+      const typeJour = mp.dow === 6 ? 'samedi' : mp.dow === 0 ? 'dimanche' : 'lun_ven';
+      const heure = `${mp.h.toString().padStart(2, '0')}:${mp.mi.toString().padStart(2, '0')}`;
       const { data: plages } = await supabase.from('tarif_plages').select('tarif').eq('type_jour', typeJour).lte('heure_debut', heure).gt('heure_fin', heure);
       if (plages && plages.length > 0) montant = plages[0].tarif || 0;
     }

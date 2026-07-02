@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
+import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInputToISO, mMondayStr, mNoon, mAddDaysStr, MAYOTTE_OFFSET } from '../lib/mayotte';
 
 type ViewMode = 'jour' | 'semaine' | 'mois' | 'liste';
 type PeriodeFilter = 'all' | 'matin' | 'apres_midi' | 'astreinte';
@@ -81,66 +82,30 @@ const HOURS = Array.from({ length: 20 }, (_, i) => i + 4);
 const TOTAL_HOURS = 20;
 const START_HOUR = 4;
 
-function toLocalDateStr(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+// ===== Tout est raisonne en HEURE DE MAYOTTE (module ../lib/mayotte) =====
+// Les instants (courses, new Date()) sont absolus ; on lit TOUJOURS leurs
+// composantes en heure de Mayotte -> le fuseau du PC du directeur n'a aucun effet.
+const p2 = (n: number) => String(n).padStart(2, '0');
+const toLocalDateStr = (d: Date | string) => mDateStr(d);          // "YYYY-MM-DD" Mayotte
+const getTimezoneOffsetStr = (_d?: Date) => MAYOTTE_OFFSET;
+const mayotteInputToISO = mInputToISO;
+const isoToMayotteInput = (iso: string) => mInputStr(iso);
+const toLocalDateTimeStrTz = (d: Date) => mInputToISO(mInputStr(d));
 
-// L'exploitation est a Mayotte (UTC+3, SANS changement d'heure). On epingle
-// l'ecriture sur cet offset FIXE, peu importe le fuseau du navigateur qui saisit
-// (metropole, Reunion...) : l'heure tapee est TOUJOURS une heure de Mayotte.
-const MAYOTTE_OFFSET = '+03:00';
-const MAYOTTE_OFFSET_MS = 3 * 3600 * 1000;
-function getTimezoneOffsetStr(_d?: Date): string { return MAYOTTE_OFFSET; }
-
-// "YYYY-MM-DDTHH:MM" (valeur d'un <input datetime-local>, interpretee comme heure
-// de Mayotte) -> instant ISO absolu.
-function mayotteInputToISO(input: string): string {
-  return `${input.slice(0, 16)}:00${MAYOTTE_OFFSET}`;
-}
-// instant ISO -> "YYYY-MM-DDTHH:MM" en heure de Mayotte (pour REMPLIR un input,
-// independamment du fuseau du navigateur). +3h puis lecture des champs UTC.
-function isoToMayotteInput(iso: string): string {
-  const d = new Date(new Date(iso).getTime() + MAYOTTE_OFFSET_MS);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-}
-
-function toLocalDateTimeStr(d: Date): string {
-  const date = toLocalDateStr(d);
-  const h = String(d.getHours()).padStart(2, '0');
-  const min = String(d.getMinutes()).padStart(2, '0');
-  return `${date}T${h}:${min}`;
-}
-
-function toLocalDateTimeStrTz(d: Date): string {
-  return `${toLocalDateTimeStr(d)}:00${getTimezoneOffsetStr(d)}`;
-}
-
+const FR_DAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+const FR_MONTHS = ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aout', 'Sep', 'Oct', 'Nov', 'Dec'];
 function formatDateFr(d: Date): string {
-  const days = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
-  const months = ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aout', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  const p = mParts(d);
+  return `${FR_DAYS[p.dow]} ${p.d} ${FR_MONTHS[p.mo]} ${p.y}`;
 }
 
-function getMonday(d: Date): Date {
-  const date = new Date(d);
-  const day = date.getDay() || 7;
-  date.setDate(date.getDate() - day + 1);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
+// Lundi (ancre a MIDI heure de Mayotte, pour que getDate/getDay du navigateur au
+// rendu tombent sur le bon jour) de la semaine contenant d.
+function getMonday(d: Date): Date { return mNoon(mMondayStr(d)); }
+const isSameDay = (a: Date | string, b: Date | string) => mSameDay(a, b);
 
 function parseCourseDate(dateStr: string): Date {
-  if (dateStr.endsWith('Z') || dateStr.includes('+')) {
-    return new Date(dateStr);
-  }
+  if (dateStr.endsWith('Z') || dateStr.includes('+')) return new Date(dateStr);
   return new Date(dateStr.replace('T', ' '));
 }
 
@@ -240,25 +205,23 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function getDateRange(): { from: string; to: string } {
-    const d = new Date(currentDate);
-    d.setHours(0, 0, 0, 0);
-    let from: Date, to: Date;
+    // Bornes en MINUIT de Mayotte (instants absolus), independantes du fuseau du
+    // navigateur -> memes fenetres de journee que l'appli chauffeur/coordinateur.
+    const p = mParts(currentDate);
+    let fromStr: string, toStr: string;
     if (view === 'jour' || view === 'liste') {
-      from = new Date(d);
-      to = new Date(d);
-      to.setDate(to.getDate() + 1);
+      fromStr = mDateStr(currentDate);
+      toStr = mAddDaysStr(fromStr, 1);
     } else if (view === 'semaine') {
-      from = getMonday(d);
-      to = new Date(from);
-      to.setDate(to.getDate() + 7);
+      fromStr = mMondayStr(currentDate);
+      toStr = mAddDaysStr(fromStr, 7);
     } else {
-      from = new Date(d.getFullYear(), d.getMonth(), 1);
-      to = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+      fromStr = `${p.y}-${p2(p.mo + 1)}-01`;
+      const ny = p.mo === 11 ? p.y + 1 : p.y;
+      const nmo = p.mo === 11 ? 0 : p.mo + 1;
+      toStr = `${ny}-${p2(nmo + 1)}-01`;
     }
-    // from/to sont des minuits LOCAUX : on renvoie l'instant exact (toISOString)
-    // et non une chaine locale naive que Postgres interpretait en UTC -> les
-    // courses de 00:00-03:00 (Mayotte UTC+3) tombaient dans le mauvais jour/semaine.
-    return { from: from.toISOString(), to: to.toISOString() };
+    return { from: mMidnightISO(fromStr), to: mMidnightISO(toStr) };
   }
 
   async function loadCourses() {
@@ -306,12 +269,18 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function navigate(dir: number) {
-    let d = new Date(currentDate);
-    if (view === 'jour' || view === 'liste') d.setDate(d.getDate() + dir);
-    else if (view === 'semaine') d.setDate(d.getDate() + dir * 7);
-    // Mois : passer par le 1er du mois cible, sinon partir d'un 31 saute un mois.
-    else d = new Date(d.getFullYear(), d.getMonth() + dir, 1);
-    setCurrentDate(d);
+    // currentDate est ancre a MIDI d'un jour de Mayotte ; on navigue en jours de
+    // Mayotte (independant du fuseau du navigateur).
+    const dayStr = mDateStr(currentDate);
+    if (view === 'jour' || view === 'liste') setCurrentDate(mNoon(mAddDaysStr(dayStr, dir)));
+    else if (view === 'semaine') setCurrentDate(mNoon(mAddDaysStr(dayStr, dir * 7)));
+    else {
+      const p = mParts(currentDate);
+      let y = p.y, mo = p.mo + dir;
+      if (mo < 0) { mo = 11; y--; }
+      if (mo > 11) { mo = 0; y++; }
+      setCurrentDate(mNoon(`${y}-${p2(mo + 1)}-01`));
+    }
   }
 
   function goToday() { setCurrentDate(new Date()); }
@@ -364,18 +333,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function getDuplicableCourses(): Course[] {
-    const monday = getMonday(currentDate);
+    // Comparaison par JOUR (ou SEMAINE) de Mayotte, sans bornes d'instants.
     if (view === 'jour') {
-      return courses.filter(c => isDuplicable(c) && isSameDay(parseCourseDate(c.date_heure), currentDate));
-    } else {
-      const sunday = new Date(monday);
-      sunday.setDate(sunday.getDate() + 7);
-      return courses.filter(c => {
-        if (!isDuplicable(c)) return false;
-        const d = parseCourseDate(c.date_heure);
-        return d >= monday && d < sunday;
-      });
+      return courses.filter(c => isDuplicable(c) && mSameDay(c.date_heure, currentDate));
     }
+    const wk = mMondayStr(currentDate);
+    return courses.filter(c => isDuplicable(c) && mMondayStr(c.date_heure) === wk);
   }
 
   function isDayAllowed(date: Date, feries: string[]): boolean {
@@ -405,12 +368,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
   // Astreintes / creneaux coordinateur de la vue courante (jour ou semaine),
   // filtres sur leur date de debut, pour duplication en meme temps que les courses.
   function inCurrentView(dateStr: string): boolean {
-    const d = new Date(dateStr);
-    if (view === 'jour') return isSameDay(d, currentDate);
-    const monday = getMonday(currentDate);
-    const sunday = new Date(monday);
-    sunday.setDate(sunday.getDate() + 7);
-    return d >= monday && d < sunday;
+    if (view === 'jour') return mSameDay(dateStr, currentDate);
+    return mMondayStr(dateStr) === mMondayStr(currentDate);
   }
 
   function getDuplicableAstreintes(): Astreinte[] {
@@ -435,11 +394,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return { date_debut: shiftDaysMayotte(debutStr, nDays), date_fin: shiftDaysMayotte(finStr, nDays) };
   }
 
-  // Nombre de jours (entier) entre la date de depart d'un element source et une date cible (minuit local).
-  function daysToTarget(sourceDebutStr: string, targetMidnight: Date): number {
-    const src = new Date(sourceDebutStr);
-    src.setHours(0, 0, 0, 0);
-    return Math.round((targetMidnight.getTime() - src.getTime()) / 86400000);
+  // Nombre de jours (entier) entre le jour de Mayotte de la source et un jour cible "YYYY-MM-DD".
+  function daysToTargetStr(sourceDebutStr: string, targetDateStr: string): number {
+    return Math.round((mNoon(targetDateStr).getTime() - mNoon(mDateStr(sourceDebutStr)).getTime()) / 86400000);
   }
 
   async function handleDuplicate() {
@@ -480,12 +437,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
         // de semaine (lundi->lundi...) : cocher plusieurs jours reconstitue la
         // semaine sans tout ecraser sur une seule date. En vue Jour, tout le
         // jour source est copie sur chaque jour coche (quel que soit le jour).
-        const sameDow = (srcStr: string, target: Date) => parseCourseDate(srcStr).getDay() === target.getDay();
+        const sameDow = (srcStr: string, targetStr: string) => mDow(srcStr) === mDow(mNoon(targetStr));
         dupTargetDates.forEach(targetDateStr => {
-          const targetDate = new Date(targetDateStr + 'T00:00:00');
-          const courseSrc = view !== 'jour' ? sourceCourses.filter(c => sameDow(c.date_heure, targetDate)) : sourceCourses;
-          const astrSrc = view !== 'jour' ? sourceAstreintes.filter(a => sameDow(a.date_debut, targetDate)) : sourceAstreintes;
-          const crenSrc = view !== 'jour' ? sourceCreneaux.filter(cc => sameDow(cc.date_debut, targetDate)) : sourceCreneaux;
+          const courseSrc = view !== 'jour' ? sourceCourses.filter(c => sameDow(c.date_heure, targetDateStr)) : sourceCourses;
+          const astrSrc = view !== 'jour' ? sourceAstreintes.filter(a => sameDow(a.date_debut, targetDateStr)) : sourceAstreintes;
+          const crenSrc = view !== 'jour' ? sourceCreneaux.filter(cc => sameDow(cc.date_debut, targetDateStr)) : sourceCreneaux;
           courseSrc.forEach(c => {
             // On copie l'heure de MAYOTTE de la source sur le jour cible.
             const srcHHMM = isoToMayotteInput(c.date_heure).slice(11, 16);
@@ -501,8 +457,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
               is_brouillon: true,
             });
           });
-          astrSrc.forEach(a => buildAstreinte(a, daysToTarget(a.date_debut, targetDate)));
-          crenSrc.forEach(cc => buildCreneau(cc, daysToTarget(cc.date_debut, targetDate)));
+          astrSrc.forEach(a => buildAstreinte(a, daysToTargetStr(a.date_debut, targetDateStr)));
+          crenSrc.forEach(cc => buildCreneau(cc, daysToTargetStr(cc.date_debut, targetDateStr)));
         });
       } else {
         const startDate = new Date(currentDate);
@@ -529,8 +485,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 is_brouillon: true,
               });
             });
-            sourceAstreintes.forEach(a => buildAstreinte(a, daysToTarget(a.date_debut, targetDate)));
-            sourceCreneaux.forEach(cc => buildCreneau(cc, daysToTarget(cc.date_debut, targetDate)));
+            sourceAstreintes.forEach(a => buildAstreinte(a, daysToTargetStr(a.date_debut, mDateStr(targetDate))));
+            sourceCreneaux.forEach(cc => buildCreneau(cc, daysToTargetStr(cc.date_debut, mDateStr(targetDate))));
           }
         } else {
           for (let weekOffset = 1; weekOffset <= dupWeeks; weekOffset++) {
@@ -732,9 +688,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function openCreate(chauffeurId?: string, hour?: number) {
-    const d = new Date(currentDate);
-    if (hour !== undefined) d.setHours(hour, 0, 0, 0);
-    else d.setHours(8, 0, 0, 0);
+    // Heure par defaut construite en heure de MAYOTTE (jour affiche + heure H).
+    const defaultHour = hour !== undefined ? hour : 8;
+    const dateHeureDefault = `${mDateStr(currentDate)}T${p2(defaultHour)}:00`;
     const chauffeur = chauffeurId ? chauffeurs.find(c => c.id === chauffeurId) : null;
     const ligne = chauffeur?.ligne_id ? lignes.find(l => l.id === chauffeur.ligne_id) : null;
 
@@ -742,7 +698,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
     const last = saved ? JSON.parse(saved) : null;
 
     setForm({
-      date_heure: toLocalDateTimeStr(d),
+      date_heure: dateHeureDefault,
       depart: ligne?.depart || '',
       arrivee: ligne?.arrivee || '',
       statut_planification: 'planifie',
@@ -1173,8 +1129,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   function getCoursePosition(course: Course): { left: string; width: string } {
-    const d = parseCourseDate(course.date_heure);
-    const h = d.getHours() + d.getMinutes() / 60;
+    // Position sur la grille selon l'heure de MAYOTTE (pas l'heure du navigateur).
+    const h = mHour(course.date_heure);
     const startOffset = h - START_HOUR;
     const duration = (course.duree_minutes || 60) / 60;
     return {
@@ -1183,22 +1139,17 @@ export function PlanningPage({ user }: PlanningPageProps) {
     };
   }
 
+  // Jours (ancres a midi Mayotte) : getDay()/getDate() au rendu tombent sur le bon jour.
   const weekDays = useMemo(() => {
-    const monday = getMonday(currentDate);
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(monday);
-      d.setDate(d.getDate() + i);
-      return d;
-    });
+    const monday = mMondayStr(currentDate);
+    return Array.from({ length: 7 }, (_, i) => mNoon(mAddDaysStr(monday, i)));
   }, [currentDate]);
 
   const monthDays = useMemo(() => {
-    const first = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    const last = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+    const p = mParts(currentDate);
     const days: Date[] = [];
-    for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
-      days.push(new Date(d));
-    }
+    let ds = `${p.y}-${p2(p.mo + 1)}-01`;
+    while (mParts(mNoon(ds)).mo === p.mo) { days.push(mNoon(ds)); ds = mAddDaysStr(ds, 1); }
     return days;
   }, [currentDate]);
 
@@ -1457,8 +1408,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             .map(a => {
                               const aStart = new Date(a.date_debut);
                               const aEnd = new Date(a.date_fin);
-                              const dayStart = new Date(currentDate);
-                              dayStart.setHours(START_HOUR, 0, 0, 0);
+                              const dayStart = new Date(new Date(mMidnightISO(mDateStr(currentDate))).getTime() + START_HOUR * 3600000);
                               const startH = Math.max(0, (aStart.getTime() - dayStart.getTime()) / 3600000);
                               const endH = Math.min(TOTAL_HOURS, (aEnd.getTime() - dayStart.getTime()) / 3600000);
                               if (endH <= 0 || startH >= TOTAL_HOURS) return null;
@@ -1486,8 +1436,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             .map(cc => {
                               const cStart = new Date(cc.date_debut);
                               const cEnd = new Date(cc.date_fin);
-                              const dayStart = new Date(currentDate);
-                              dayStart.setHours(START_HOUR, 0, 0, 0);
+                              const dayStart = new Date(new Date(mMidnightISO(mDateStr(currentDate))).getTime() + START_HOUR * 3600000);
                               const startH = Math.max(0, (cStart.getTime() - dayStart.getTime()) / 3600000);
                               const endH = Math.min(TOTAL_HOURS, (cEnd.getTime() - dayStart.getTime()) / 3600000);
                               if (endH <= 0 || startH >= TOTAL_HOURS) return null;

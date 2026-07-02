@@ -3,6 +3,7 @@ import { LogOut, RefreshCw, ArrowLeft, Phone, Info, RotateCw } from 'lucide-reac
 import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
 import type { Chauffeur, Incident } from '../lib/types';
+import { mDateStr, mMidnightISO, mAddDaysStr } from '../../lib/mayotte';
 
 // Columns the anon role is allowed to read on chauffeurs (column-level grant,
 // see migration 20260611120000): selecting * would be rejected.
@@ -76,10 +77,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     if (!chauffeur) return;
     if (!background) setLoading(true);
     // Local-day window, aligned with the back-office planning (local time)
-    const today = new Date();
-    const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
-    const startOfDay = new Date(y, m, d).toISOString();
-    const endOfDay = new Date(y, m, d + 1).toISOString();
+    const dayStr = mDateStr(new Date());
+    const startOfDay = mMidnightISO(dayStr);
+    const endOfDay = mMidnightISO(mAddDaysStr(dayStr, 1));
 
     const [coursesRes, incidentsRes, creneauxRes] = await Promise.all([
       // Drafts and replaced courses are hidden (the replacement course is shown)
@@ -148,10 +148,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
 
   const handleStartReplacement = async (course: CourseWithChauffeur) => {
     setReplacementCourse(course);
-    const today = new Date();
-    const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
-    const startOfDay = new Date(y, m, d).toISOString();
-    const endOfDay = new Date(y, m, d + 1).toISOString();
+    const dayStr = mDateStr(new Date());
+    const startOfDay = mMidnightISO(dayStr);
+    const endOfDay = mMidnightISO(mAddDaysStr(dayStr, 1));
 
     // A driver is busy only if one of his courses OVERLAPS the slot to replace
     const { data: allChauffeurs } = await supabase.from('chauffeurs').select(CHAUFFEUR_PUBLIC_COLS).eq('statut', 'actif').neq('id', course.chauffeur_id).neq('id', chauffeur!.id);

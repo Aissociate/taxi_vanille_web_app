@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { Edit2, Power, Trash2, Receipt, X, FileText, TrendingUp, Gauge, Clock, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import type { Chauffeur } from '../../pages/ChauffeursPage';
+import { mParts, mDateStr, mAddDaysStr, mMondayStr, mMidnightISO } from '../../lib/mayotte';
 
 type PeriodFilter = 'jour' | 'semaine' | 'mois' | 'annee' | 'total';
 
@@ -115,38 +116,34 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   }, [chauffeur.id, period, referenceDate]);
 
   function getDateRange(): { from: string; to: string } {
-    const now = referenceDate;
-    const y = now.getFullYear();
-    const m = now.getMonth();
-    const d = now.getDate();
-    // Le "to" doit couvrir la FIN de la periode selectionnee (dimanche pour la
-    // semaine, dernier jour du mois, 31/12 pour l'annee) et non le jour courant.
-    // Sinon la vue "semaine" n'affiche que du lundi jusqu'a aujourd'hui et masque
-    // les courses des jours suivants de la meme semaine (ex: 1er juillet vu le 30 juin).
-    let from: Date, to: Date;
+    // Fenetres de periode en heure de MAYOTTE (bornes minuit Mayotte, "to" exclusif
+    // = debut de la periode suivante), independantes du fuseau du navigateur.
+    const p = mParts(referenceDate);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    let fromStr: string, toStr: string;
     switch (period) {
       case 'jour':
-        from = new Date(y, m, d, 0, 0, 0);
-        to = new Date(y, m, d, 23, 59, 59);
+        fromStr = mDateStr(referenceDate);
+        toStr = mAddDaysStr(fromStr, 1);
         break;
-      case 'semaine': {
-        const day = now.getDay() || 7;
-        from = new Date(y, m, d - day + 1, 0, 0, 0);
-        to = new Date(y, m, d - day + 7, 23, 59, 59);
+      case 'semaine':
+        fromStr = mMondayStr(referenceDate);
+        toStr = mAddDaysStr(fromStr, 7);
+        break;
+      case 'mois': {
+        fromStr = `${p.y}-${pad(p.mo + 1)}-01`;
+        const ny = p.mo === 11 ? p.y + 1 : p.y, nmo = p.mo === 11 ? 0 : p.mo + 1;
+        toStr = `${ny}-${pad(nmo + 1)}-01`;
         break;
       }
-      case 'mois':
-        from = new Date(y, m, 1, 0, 0, 0);
-        to = new Date(y, m + 1, 0, 23, 59, 59);
-        break;
       case 'annee':
-        from = new Date(y, 0, 1, 0, 0, 0);
-        to = new Date(y, 11, 31, 23, 59, 59);
+        fromStr = `${p.y}-01-01`;
+        toStr = `${p.y + 1}-01-01`;
         break;
       default:
-        return { from: '2000-01-01T00:00:00.000Z', to: new Date(y + 5, 11, 31, 23, 59, 59).toISOString() };
+        return { from: '2000-01-01T00:00:00.000Z', to: mMidnightISO(`${p.y + 5}-12-31`) };
     }
-    return { from: from.toISOString(), to: to.toISOString() };
+    return { from: mMidnightISO(fromStr), to: mMidnightISO(toStr) };
   }
 
   function navigatePeriod(direction: number) {
@@ -187,7 +184,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
       .select('id, date_heure, depart, arrivee, statut_realisation, statut_planification, montant, periode, ligne_id')
       .eq('chauffeur_id', chauffeur.id)
       .gte('date_heure', from)
-      .lte('date_heure', to)
+      .lt('date_heure', to)
       .order('date_heure', { ascending: true });
     if (data) setCourses(data);
   }
@@ -238,12 +235,10 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
 
   async function loadAstreinteSessions() {
     const { from, to } = getDateRange();
-    // La colonne `date` est un jour calendaire LOCAL : on ne peut pas la comparer
-    // au jour UTC de l'instant (from.split('T')[0]) sinon decalage d'un jour a
-    // Mayotte (UTC+3). On calcule le jour local de from et le dernier jour inclus.
-    const dstr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const fromDay = dstr(new Date(from));
-    const toDay = dstr(new Date(new Date(to).getTime() - 1));
+    // La colonne `date` est un jour calendaire de Mayotte : on compare en jours
+    // de Mayotte (from inclus, to est le debut de periode suivante -> -1ms = dernier jour inclus).
+    const fromDay = mDateStr(new Date(from));
+    const toDay = mDateStr(new Date(new Date(to).getTime() - 1));
     const { data } = await supabase
       .from('astreinte_sessions')
       .select('id, date, heure_debut, heure_fin, created_at')
@@ -261,7 +256,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
       .select('id, course_id, statut, heure_debut, heure_fin, created_at, course:courses!course_executions_course_id_fkey(date_heure, depart, arrivee)')
       .eq('chauffeur_id', chauffeur.id)
       .gte('heure_debut', from)
-      .lte('heure_debut', to)
+      .lt('heure_debut', to)
       .order('heure_debut', { ascending: false })
       .limit(50);
     if (data) setCourseExecutions(data);

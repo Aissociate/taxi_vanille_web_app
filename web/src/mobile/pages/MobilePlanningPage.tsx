@@ -5,11 +5,12 @@ import { useAuth, clearAuth } from '../lib/store';
 import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue';
 import type { CourseExecution, Ligne } from '../lib/types';
 import MobileIncidentSheet from '../components/MobileIncidentSheet';
+import { mDateStr, mMidnightISO, mAddDaysStr } from '../../lib/mayotte';
 
-// Date calendaire LOCALE (Mayotte UTC+3) et non UTC : sinon entre 00:00 et 03:00
-// locales, toISOString() renvoie la veille -> sessions d'astreinte en double / perdues.
+// Jour calendaire de MAYOTTE (UTC+3 fixe), independant du fuseau du telephone :
+// planning et chauffeur partagent ainsi exactement la meme "journee".
 function localDayStr(dt: Date = new Date()): string {
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  return mDateStr(dt);
 }
 
 interface CourseWithDetails {
@@ -140,13 +141,13 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
   const fetchCourses = async (background = false) => {
     if (!chauffeur) return;
     if (!background) setLoading(true);
-    // Local-day window: the back-office plans courses in local time, so the
-    // driver's "today" must match the local calendar day, not the UTC one.
+    // Fenetre de journee en heure de MAYOTTE (bornes minuit Mayotte), identique
+    // a celle du planning back-office -> meme "aujourd'hui" pour tous.
     const today = new Date();
-    const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
-    const startOfDay = new Date(y, m, d).toISOString();
-    const endOfDay = new Date(y, m, d + 1).toISOString();
-    const endOfTomorrow = new Date(y, m, d + 2).toISOString();
+    const dayStr = mDateStr(today);
+    const startOfDay = mMidnightISO(dayStr);
+    const endOfDay = mMidnightISO(mAddDaysStr(dayStr, 1));
+    const endOfTomorrow = mMidnightISO(mAddDaysStr(dayStr, 2));
 
     // Drafts, replaced, cancelled and incident courses must never reach the driver
     const visibleCourses = () =>
