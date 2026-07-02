@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { LogOut, Clock, AlertTriangle, Calendar, ChevronDown, ChevronUp, RefreshCw, X } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
@@ -102,8 +102,10 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Live updates: refresh as soon as the back-office adds, reassigns or
-    // removes a course/astreinte, without closing/reopening the app.
+    // Rafraichissement en arriere-plan toutes les 3 min (au lieu d'un refresh a
+    // chaque changement de course de toute l'organisation, trop frequent). On
+    // garde le temps-reel sur astreintes et creneaux (rares).
+    const poll = setInterval(() => fetchCourses(true), 180000);
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -111,7 +113,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     };
     const channel = supabase
       .channel(`planning_${chauffeur.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'astreintes' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'coordinateur_creneaux' }, scheduleRefresh)
       .subscribe();
@@ -119,11 +120,21 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      clearInterval(poll);
       if (refreshTimer) clearTimeout(refreshTimer);
       supabase.removeChannel(channel);
       stopAstreinteGps();
     };
   }, [chauffeur]);
+
+  // Position de scroll a restaurer apres un rafraichissement en arriere-plan.
+  const pendingScrollRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current != null) {
+      window.scrollTo(0, pendingScrollRef.current);
+      pendingScrollRef.current = null;
+    }
+  });
 
   useEffect(() => {
     if (!astreinteSession || astreinteSession.heure_fin) { stopAstreinteGps(); return; }
@@ -163,6 +174,8 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     if (todayRes.data) {
       const { data: executions } = await supabase.from('course_executions').select('*').eq('chauffeur_id', chauffeur.id).in('course_id', todayRes.data.map((c) => c.id));
       const merged = todayRes.data.map((course) => ({ ...course, execution: executions?.find((e) => e.course_id === course.id) || null }));
+      // Rafraichissement en arriere-plan : memoriser le scroll pour le restaurer.
+      if (background) pendingScrollRef.current = window.scrollY;
       setCourses(merged as CourseWithDetails[]);
       setLastSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' }));
 
