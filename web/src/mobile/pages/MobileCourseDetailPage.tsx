@@ -6,7 +6,7 @@ import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue
 import { getCurrentPosition, requestLocationPermission } from '../lib/native';
 import MobileIncidentSheet from '../components/MobileIncidentSheet';
 import type { Course, CourseExecution, LigneArret } from '../lib/types';
-import { mParts } from '../../lib/mayotte';
+import { mParts, fmtHM } from '../../lib/mayotte';
 
 type Step = 'preview' | 'depart' | 'arrivee';
 
@@ -216,7 +216,7 @@ export default function MobileCourseDetailPage({ courseId, onNavigate }: Props) 
       <div className="min-h-screen bg-gray-50 flex flex-col p-4">
         <button type="button" onClick={() => onNavigate('/mobile/planning')} className="mb-4 self-start"><ArrowLeft size={20} /></button>
         <h1 className="text-2xl font-bold text-gray-900">{course.ligne?.nom || `${course.depart} - ${course.arrivee}`}</h1>
-        <p className="text-sm text-gray-500 mt-2">{arrets.length} arrets - Depart prevu {new Date(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</p>
+        <p className="text-sm text-gray-500 mt-2">{arrets.length} arrets - Depart prevu {fmtHM(course.date_heure)}</p>
         <div className="mt-6 space-y-2">
           {arrets.map((arret, i) => (
             <div key={arret.id} className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg bg-white">

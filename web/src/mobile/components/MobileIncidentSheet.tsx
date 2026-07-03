@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react';
 import { Camera, Video, Mic, Square, X, Check, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { enqueue, isOnline } from '../lib/offlineQueue';
+import { fmtHM } from '../../lib/mayotte';
 import type { IncidentType } from '../lib/types';
 
 interface Props {
@@ -257,7 +258,7 @@ export default function MobileIncidentSheet({ onClose, chauffeurId, userId, cour
             <span className="text-xs font-bold text-red-600">ALERT</span>
           </div>
           <span className="text-[10px] text-gray-400">
-            {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+            {fmtHM(new Date())}
           </span>
         </div>
 

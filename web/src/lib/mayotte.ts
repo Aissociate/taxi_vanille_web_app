@@ -83,7 +83,31 @@ export function mAddDaysStr(dateStr: string, nDays: number): string {
   return mDateStr(new Date(mNoon(dateStr).getTime() + nDays * 86400000));
 }
 
-/** Formatage d'affichage court "HH:MM" en heure de Mayotte. */
+// ATTENTION : ne JAMAIS formater une heure/date via toLocaleTimeString/
+// toLocaleDateString avec { timeZone: 'Indian/Mayotte' } pour l'affichage.
+// Ce chemin depend des donnees de fuseau (ICU) du navigateur : sur certains
+// telephones (WebView Android allegee) le fuseau est inconnu -> repli silencieux
+// sur l'heure LOCALE de l'appareil, donc un decalage. Les fonctions ci-dessous
+// formatent uniquement a partir de mParts (offset fixe +3h) -> 100% deterministe,
+// identique sur tous les appareils quel que soit leur fuseau.
+
+const FR_WEEKDAYS_LONG = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+const FR_MONTHS_LONG = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
+/** Formatage d'affichage court "HH:MM" en heure de Mayotte (deterministe). */
 export function fmtHM(v: string | Date): string {
-  return asDate(v).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: MAYOTTE_TZ });
+  const p = mParts(v);
+  return `${p2(p.h)}:${p2(p.mi)}`;
+}
+
+/** "vendredi 3 juillet" en heure de Mayotte (jour + mois longs, sans annee). */
+export function fmtDateLong(v: string | Date): string {
+  const p = mParts(v);
+  return `${FR_WEEKDAYS_LONG[p.dow]} ${p.d} ${FR_MONTHS_LONG[p.mo]}`;
+}
+
+/** "juillet 2026" en heure de Mayotte. */
+export function fmtMonthYear(v: string | Date): string {
+  const p = mParts(v);
+  return `${FR_MONTHS_LONG[p.mo]} ${p.y}`;
 }

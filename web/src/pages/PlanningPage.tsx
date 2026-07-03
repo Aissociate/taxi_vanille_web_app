@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
-import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInputToISO, mMondayStr, mNoon, mAddDaysStr, MAYOTTE_OFFSET } from '../lib/mayotte';
+import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInputToISO, mMondayStr, mNoon, mAddDaysStr, MAYOTTE_OFFSET, fmtHM, fmtMonthYear } from '../lib/mayotte';
 
 type ViewMode = 'jour' | 'semaine' | 'mois' | 'liste';
 type PeriodeFilter = 'all' | 'matin' | 'apres_midi' | 'astreinte';
@@ -613,7 +613,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       const li = lignes.find(x => x.id === c.ligne_id);
       rows.push([
         toLocalDateStr(d),
-        d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' }),
+        fmtHM(c.date_heure),
         ch ? `${ch.code} ${ch.prenom} ${ch.nom}` : '',
         li ? li.code : '',
         c.depart,
@@ -1364,7 +1364,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           </div>
                           {chCourses.map(course => {
                             const pos = getCoursePosition(course);
-                            const time = parseCourseDate(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
+                            const time = fmtHM(course.date_heure);
                             const isNonPlanifie = course.statut_planification === 'non_planifie';
                             const isRemplacee = course.statut_realisation === 'remplace';
                             const isBrouillon = course.is_brouillon;
@@ -1496,7 +1496,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     <div className="flex-1 p-2 flex flex-wrap gap-1.5 content-start">
                       {unassigned.map(course => {
                         const ligne = course.ligne_id ? lignes.find(l => l.id === course.ligne_id) : null;
-                        const time = parseCourseDate(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
+                        const time = fmtHM(course.date_heure);
                         const isNonPlanifie = course.statut_planification === 'non_planifie';
                         const isBrouillon = course.is_brouillon;
                         return (
@@ -1594,7 +1594,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           const isBrouillon = c.is_brouillon;
                           return (
                             <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })} {c.depart} → {c.arrivee}
+                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
                             </div>
                           );
                         })}
@@ -1636,7 +1636,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                               className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer border-2 border-dashed ${isBrouillon ? 'border-blue-300' : 'border-amber-300'} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`}
                               style={{ backgroundColor: isBrouillon ? '#3b82f6' : '#f59e0b' }}
                             >
-                              ⚠ {parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })} {c.depart} → {c.arrivee}
+                              ⚠ {fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
                             </div>
                           );
                         })}
@@ -1672,7 +1672,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                       const ligne = c.ligne_id ? lignes.find(l => l.id === c.ligne_id) : null;
                       return (
                         <div key={c.id} className="text-[8px] px-1 py-0.5 rounded mb-0.5 text-white truncate" style={{ backgroundColor: c.statut_planification === 'non_planifie' ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                          {parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+                          {fmtHM(c.date_heure)}
                         </div>
                       );
                     })}
@@ -1726,7 +1726,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     const selected = selectMode && selectedCourseIds.has(course.id);
                     return (
                       <tr key={course.id} onClick={() => onCourseClick(course)} className={`cursor-pointer transition-colors ${selected ? 'bg-blue-50' : 'hover:bg-amber-50/40'}`}>
-                        <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{parseCourseDate(course.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</td>
+                        <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{fmtHM(course.date_heure)}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{ch ? `${ch.code} ${ch.nom} ${ch.prenom}` : <span className="text-amber-600 font-medium">Non affecte</span>}</td>
                         <td className="px-3 py-2">{li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}</td>
                         <td className="px-3 py-2 text-gray-700">{course.depart} → {course.arrivee}</td>
@@ -1823,7 +1823,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           setDupSelectedIds(next);
                         }} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
                         <div className="flex-1 min-w-0">
-                          <span className="text-xs font-medium text-gray-800">{view === 'semaine' ? <span className="text-amber-600 capitalize mr-1">{parseCourseDate(c.date_heure).toLocaleDateString('fr-FR', { weekday: 'short', timeZone: 'Indian/Mayotte' })}</span> : null}{parseCourseDate(c.date_heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}</span>
+                          <span className="text-xs font-medium text-gray-800">{view === 'semaine' ? <span className="text-amber-600 capitalize mr-1">{FR_DAYS[mDow(c.date_heure)]}</span> : null}{fmtHM(c.date_heure)}</span>
                           <span className="text-xs text-gray-500 ml-2">{c.depart} → {c.arrivee}</span>
                         </div>
                         <span className="text-[10px] text-gray-400">{ch?.code || ''}</span>
@@ -1862,7 +1862,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   {/* Navigation mois */}
                   <div className="flex items-center justify-between mb-2">
                     <button type="button" onClick={() => setDupCalMonth(new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth() - 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft className="w-4 h-4" /></button>
-                    <span className="text-xs font-semibold text-gray-700 capitalize">{dupCalMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Indian/Mayotte' })}</span>
+                    <span className="text-xs font-semibold text-gray-700 capitalize">{fmtMonthYear(dupCalMonth)}</span>
                     <button type="button" onClick={() => setDupCalMonth(new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth() + 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronRight className="w-4 h-4" /></button>
                   </div>
                   {/* Entetes jours */}
@@ -1910,7 +1910,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   <div className="flex flex-wrap gap-1 mt-2">
                     {dupTargetDates.map(d => (
                       <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-medium">
-                        {new Date(d + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'Indian/Mayotte' })}
+                        {(() => { const p = mParts(mNoon(d)); return `${FR_DAYS[p.dow]} ${p2(p.d)} ${FR_MONTHS[p.mo]}`; })()}
                         <button type="button" onClick={() => setDupTargetDates(prev => prev.filter(x => x !== d))} className="text-amber-400 hover:text-red-500">
                           <X className="w-3 h-3" />
                         </button>
@@ -1968,7 +1968,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   {editingCourse.depart} → {editingCourse.arrivee}
                 </p>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  {new Date(editingCourse.date_heure).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+                  {(() => { const p = mParts(editingCourse.date_heure); return `${p.d} ${FR_MONTHS[p.mo]} ${fmtHM(editingCourse.date_heure)}`; })()}
                   {editingCourse.chauffeur_id && ` — ${chauffeurs.find(c => c.id === editingCourse.chauffeur_id)?.prenom || ''} ${chauffeurs.find(c => c.id === editingCourse.chauffeur_id)?.nom || ''}`}
                 </p>
               </div>

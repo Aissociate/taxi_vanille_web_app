@@ -3,7 +3,7 @@ import { LogOut, RefreshCw, ArrowLeft, Phone, Info, RotateCw } from 'lucide-reac
 import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
 import type { Chauffeur, Incident } from '../lib/types';
-import { mDateStr, mMidnightISO, mAddDaysStr } from '../../lib/mayotte';
+import { mDateStr, mMidnightISO, mAddDaysStr, fmtHM, fmtDateLong } from '../../lib/mayotte';
 
 // Columns the anon role is allowed to read on chauffeurs (column-level grant,
 // see migration 20260611120000): selecting * would be rejected.
@@ -144,8 +144,8 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     setLoading(false);
   };
 
-  const formatTime = (dateStr: string) => new Date(dateStr).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' });
-  const formatDate = () => new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Indian/Mayotte' }).toUpperCase();
+  const formatTime = (dateStr: string) => fmtHM(dateStr);
+  const formatDate = () => fmtDateLong(new Date()).toUpperCase();
 
   const getIncidentLabel = (type: string) => {
     const labels: Record<string, string> = { accident: 'Accident', panne: 'Panne', retard: 'Retard', voie_bloquee: 'Voie bloquee', passager_refuse: 'Passager refuse', securite: 'Securite', meteo: 'Meteo', client_absent: 'Client absent', autre: 'Autre' };

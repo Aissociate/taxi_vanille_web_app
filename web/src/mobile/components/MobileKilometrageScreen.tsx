@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Car, ArrowLeft } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { fmtMonthYear } from '../../lib/mayotte';
 
 interface Props {
   chauffeurId: string;
@@ -47,7 +48,7 @@ export default function MobileKilometrageScreen({ chauffeurId, userId, type, moi
   };
 
   const isStart = type === 'debut_mois';
-  const monthLabel = new Date(mois + '-01').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Indian/Mayotte' });
+  const monthLabel = fmtMonthYear(mois + '-01');
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
