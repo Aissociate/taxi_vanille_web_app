@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare, ArrowLeftRight } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInputToISO, mMondayStr, mNoon, mAddDaysStr, MAYOTTE_OFFSET, fmtHM, fmtMonthYear } from '../lib/mayotte';
 
@@ -176,6 +176,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   // Selection en lot (suppression par cases a cocher)
   const [selectMode, setSelectMode] = useState(false);
   const [selectedCourseIds, setSelectedCourseIds] = useState<Set<string>>(new Set());
+  const [reassignTargetId, setReassignTargetId] = useState('');
 
   // Resize state
   const [resizingId, setResizingId] = useState<string | null>(null);
@@ -970,6 +971,47 @@ export function PlanningPage({ user }: PlanningPageProps) {
     loadCourses();
   }
 
+  // Une course est "reaffectable" tant qu'elle n'est pas demarree/terminee ni
+  // deja remplacee/annulee/incident : on ne bascule que du PLANIFIE non realise.
+  function isReassignable(c: Course): boolean {
+    return !['en_cours', 'termine', 'terminee', 'remplace', 'annule', 'incident'].includes(c.statut_realisation || '');
+  }
+
+  // Coche toutes les courses reaffectables d'un chauffeur, dans la vue courante
+  // (jour / semaine / mois de Mayotte) — pour basculer un chauffeur absent en un clic.
+  function selectAllForChauffeur(chId: string) {
+    if (!chId) return;
+    const inView = courses.filter(c => {
+      if (view === 'jour') return mSameDay(c.date_heure, currentDate);
+      if (view === 'semaine') return mMondayStr(c.date_heure) === mMondayStr(currentDate);
+      const p = mParts(c.date_heure), cur = mParts(currentDate);
+      return p.y === cur.y && p.mo === cur.mo; // mois / liste
+    });
+    const ids = inView.filter(c => c.chauffeur_id === chId && isReassignable(c)).map(c => c.id);
+    if (ids.length === 0) { alert('Aucune course planifiee non realisee pour ce chauffeur dans la vue affichee.'); return; }
+    setSelectedCourseIds(new Set(ids));
+  }
+
+  // Bascule les courses cochees (PLANIFIEES non realisees) vers un autre chauffeur.
+  async function handleBatchReassign() {
+    if (selectedCourseIds.size === 0 || !reassignTargetId) return;
+    const selected = courses.filter(c => selectedCourseIds.has(c.id));
+    const okIds = selected.filter(isReassignable).map(c => c.id);
+    const blocked = selected.length - okIds.length;
+    if (okIds.length === 0) { alert('Aucune course reaffectable dans la selection (deja demarrees / terminees).'); return; }
+    const target = chauffeurs.find(c => c.id === reassignTargetId);
+    const nom = target ? `${target.code} ${target.prenom} ${target.nom}`.trim() : 'ce chauffeur';
+    if (!confirm(`Reaffecter ${okIds.length} course(s) a ${nom} ?${blocked > 0 ? `\n${blocked} course(s) deja realisee(s) ignoree(s).` : ''}`)) return;
+    const { error, count } = await supabase.from('courses').update({ chauffeur_id: reassignTargetId }, { count: 'exact' }).in('id', okIds);
+    if (error) { alert('Reaffectation impossible : ' + error.message); return; }
+    if (!count) { alert('Aucune course reaffectee (droits insuffisants ?).'); return; }
+    await logAction('update', 'courses', null, `Reaffectation en lot: ${count} course(s) -> ${nom}`, null, { ids: okIds, chauffeur_id: reassignTargetId });
+    setSelectedCourseIds(new Set());
+    setSelectMode(false);
+    setReassignTargetId('');
+    loadCourses();
+  }
+
   async function handleReplace() {
     if (!editingCourse || !replaceChauffeurId) return;
     const oldChauffeur = chauffeurs.find(c => c.id === editingCourse.chauffeur_id);
@@ -1239,10 +1281,34 @@ export function PlanningPage({ user }: PlanningPageProps) {
             <button onClick={() => { setSelectMode(!selectMode); setSelectedCourseIds(new Set()); }} className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border ${selectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
               <CheckSquare className="w-3.5 h-3.5" /> {selectMode ? 'Quitter' : 'Selection'}
             </button>
+            {selectMode && (
+              <select
+                value=""
+                onChange={(e) => selectAllForChauffeur(e.target.value)}
+                title="Cocher toutes les courses non realisees d'un chauffeur (vue affichee)"
+                className="px-2 py-1.5 text-xs font-medium bg-white text-gray-700 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Tout sélectionner pour…</option>
+                {chauffeurs.map(c => <option key={c.id} value={c.id}>{c.code} — {c.prenom} {c.nom}</option>)}
+              </select>
+            )}
             {selectMode && selectedCourseIds.size > 0 && (
-              <button onClick={handleBatchDelete} className="px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-1.5">
-                <Trash2 className="w-3.5 h-3.5" /> Supprimer ({selectedCourseIds.size})
-              </button>
+              <>
+                <select
+                  value={reassignTargetId}
+                  onChange={(e) => setReassignTargetId(e.target.value)}
+                  className="px-2 py-1.5 text-xs font-medium bg-white text-gray-700 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="">Réaffecter à…</option>
+                  {chauffeurs.map(c => <option key={c.id} value={c.id}>{c.code} — {c.prenom} {c.nom}</option>)}
+                </select>
+                <button onClick={handleBatchReassign} disabled={!reassignTargetId} className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-1.5">
+                  <ArrowLeftRight className="w-3.5 h-3.5" /> Réaffecter ({selectedCourseIds.size})
+                </button>
+                <button onClick={handleBatchDelete} className="px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-1.5">
+                  <Trash2 className="w-3.5 h-3.5" /> Supprimer ({selectedCourseIds.size})
+                </button>
+              </>
             )}
           </div>
         </div>
