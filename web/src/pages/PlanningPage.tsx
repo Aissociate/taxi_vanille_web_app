@@ -992,16 +992,48 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setSelectedCourseIds(new Set(ids));
   }
 
+  // Detecte les chevauchements d'horaire entre les courses a deplacer et le
+  // planning DEJA existant du chauffeur cible (intervalle [debut, debut+duree]).
+  function findReassignConflicts(moving: Course[], targetId: string): { moving: Course; existing: Course }[] {
+    const targetExisting = courses.filter(c =>
+      c.chauffeur_id === targetId &&
+      !selectedCourseIds.has(c.id) && // pas une course qu'on est en train de deplacer
+      !['remplace', 'annule', 'incident'].includes(c.statut_realisation || '')
+    );
+    const res: { moving: Course; existing: Course }[] = [];
+    for (const m of moving) {
+      const mStart = new Date(m.date_heure).getTime();
+      const mEnd = mStart + (m.duree_minutes || 60) * 60000;
+      const hit = targetExisting.find(t => {
+        const tStart = new Date(t.date_heure).getTime();
+        const tEnd = tStart + (t.duree_minutes || 60) * 60000;
+        return mStart < tEnd && tStart < mEnd; // chevauchement
+      });
+      if (hit) res.push({ moving: m, existing: hit });
+    }
+    return res;
+  }
+
   // Bascule les courses cochees (PLANIFIEES non realisees) vers un autre chauffeur.
   async function handleBatchReassign() {
     if (selectedCourseIds.size === 0 || !reassignTargetId) return;
     const selected = courses.filter(c => selectedCourseIds.has(c.id));
-    const okIds = selected.filter(isReassignable).map(c => c.id);
+    const movingCourses = selected.filter(isReassignable);
+    const okIds = movingCourses.map(c => c.id);
     const blocked = selected.length - okIds.length;
     if (okIds.length === 0) { alert('Aucune course reaffectable dans la selection (deja demarrees / terminees).'); return; }
     const target = chauffeurs.find(c => c.id === reassignTargetId);
     const nom = target ? `${target.code} ${target.prenom} ${target.nom}`.trim() : 'ce chauffeur';
-    if (!confirm(`Reaffecter ${okIds.length} course(s) a ${nom} ?${blocked > 0 ? `\n${blocked} course(s) deja realisee(s) ignoree(s).` : ''}`)) return;
+    const conflicts = findReassignConflicts(movingCourses, reassignTargetId);
+    let msg = `Reaffecter ${okIds.length} course(s) a ${nom} ?`;
+    if (blocked > 0) msg += `\n${blocked} course(s) deja realisee(s) ignoree(s).`;
+    if (conflicts.length > 0) {
+      const sample = conflicts.slice(0, 5)
+        .map(c => `- ${fmtHM(c.moving.date_heure)} ${c.moving.depart || '?'} -> ${c.moving.arrivee || '?'}`)
+        .join('\n');
+      msg += `\n\n/!\\ ${conflicts.length} chevauchement(s) d'horaire avec le planning de ${nom} :\n${sample}${conflicts.length > 5 ? `\n... (+${conflicts.length - 5} autre(s))` : ''}\n\nReaffecter quand meme ?`;
+    }
+    if (!confirm(msg)) return;
     const { error, count } = await supabase.from('courses').update({ chauffeur_id: reassignTargetId }, { count: 'exact' }).in('id', okIds);
     if (error) { alert('Reaffectation impossible : ' + error.message); return; }
     if (!count) { alert('Aucune course reaffectee (droits insuffisants ?).'); return; }
