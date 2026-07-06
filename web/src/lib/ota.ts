@@ -1,6 +1,3 @@
-import { Capacitor } from '@capacitor/core';
-import { CapacitorUpdater } from '@capgo/capacitor-updater';
-
 /**
  * Mise a jour a distance (OTA) de l'app chauffeur/coordinateur.
  *
@@ -9,8 +6,11 @@ import { CapacitorUpdater } from '@capgo/capacitor-updater';
  * Supabase Storage via `npm run publish:ota`. Au lancement suivant, l'app
  * telecharge ce bundle et l'applique. Aucun passage par un store.
  *
- * Cote web (tableau de bord directeur ouvert dans un navigateur), ce module
- * ne fait rien : tout est garde derriere `Capacitor.isNativePlatform()`.
+ * IMPORTANT : on accede au plugin natif Capgo via le bridge global
+ * `window.Capacitor.Plugins.CapacitorUpdater` (enregistre cote natif), et NON
+ * via un import `@capgo/capacitor-updater` / `@capacitor/core`. Ainsi le build
+ * web/admin (Bolt) n'exige aucun paquet natif. En navigateur, ce module ne fait
+ * rien (window.Capacitor est absent).
  */
 
 // Manifeste public ecrit par le script de publication (scripts/publish-ota.mjs).
@@ -22,6 +22,28 @@ type OtaManifest = {
   url: string; // URL publique du .zip du bundle web
   notes?: string;
 };
+
+// Sous-ensemble de l'API Capgo qu'on utilise, appele via le bridge natif.
+type CapUpdater = {
+  notifyAppReady: () => Promise<unknown>;
+  current: () => Promise<{ bundle?: { version?: string } }>;
+  download: (opts: { url: string; version: string }) => Promise<{ id: string }>;
+  next: (opts: { id: string }) => Promise<unknown>;
+};
+
+type CapacitorGlobal = {
+  isNativePlatform?: () => boolean;
+  Plugins?: { CapacitorUpdater?: CapUpdater };
+};
+
+function getCapacitor(): CapacitorGlobal | undefined {
+  return (window as unknown as { Capacitor?: CapacitorGlobal }).Capacitor;
+}
+
+function isNativePlatform(): boolean {
+  const cap = getCapacitor();
+  return typeof cap?.isNativePlatform === 'function' ? cap.isNativePlatform() : false;
+}
 
 // Compare deux versions "x.y.z". Renvoie true si `candidate` est plus recente.
 // Le bundle natif d'origine a pour version "builtin" -> traite comme la plus ancienne.
@@ -45,14 +67,16 @@ function isNewer(candidate: string, current: string): boolean {
  *   programme pour le PROCHAIN lancement : aucune interruption en cours d'usage.
  */
 export async function initOTA(): Promise<void> {
-  if (!Capacitor.isNativePlatform()) return;
+  if (!isNativePlatform()) return;
+
+  const CapacitorUpdater = getCapacitor()?.Plugins?.CapacitorUpdater;
+  if (!CapacitorUpdater) return; // plugin natif absent (ex: ancien APK sans OTA)
 
   // Valide le bundle courant. Indispensable : sans cet appel, Capgo considere
   // le demarrage comme un echec et revient a l'ancienne version.
   try {
     await CapacitorUpdater.notifyAppReady();
   } catch {
-    // Plugin natif absent (ex: ancien APK sans OTA) : rien a faire.
     return;
   }
 

@@ -22,7 +22,15 @@ import { DebugAIPage } from './pages/DebugAIPage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { BugReportButton } from './components/BugReportButton';
 import MobileApp from './mobile/MobileApp';
-import { Capacitor } from '@capacitor/core';
+
+// Detection de la plateforme native SANS importer @capacitor/core (sinon le
+// build web/admin exigerait ce paquet natif, absent de l'environnement Bolt).
+// Le runtime Capacitor injecte window.Capacitor dans la WebView de l'APK ;
+// en navigateur classique, il est absent -> false.
+function isNativePlatform(): boolean {
+  const cap = (window as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  return typeof cap?.isNativePlatform === 'function' ? cap.isNativePlatform() : false;
+}
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
   state = { hasError: false, error: '' };
@@ -57,7 +65,7 @@ function App() {
   // Dans l'app native (APK chauffeur), on demarre toujours en mode mobile,
   // quel que soit le chemin initial de la WebView. En navigateur, on garde la
   // detection par URL (/mobile) pour le tableau de bord directeur.
-  if (Capacitor.isNativePlatform() || window.location.pathname.startsWith('/mobile')) {
+  if (isNativePlatform() || window.location.pathname.startsWith('/mobile')) {
     return <MobileApp />;
   }
   const { user, loading, signIn, signUp, signOut } = useAuth();
