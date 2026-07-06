@@ -94,8 +94,18 @@ export function ClientsPage({ user }: ClientsPageProps) {
   }
 
   async function loadCourses() {
-    const { data } = await supabase.from('courses').select('id, client_id, date_heure, montant, statut, statut_realisation, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart');
-    if (data) setCourses(data);
+    // Sans pagination, Supabase plafonne a 1000 lignes -> le rapport client
+    // (base sur TOUTES les courses) etait severement tronque. On charge par pages.
+    const cols = 'id, client_id, date_heure, montant, statut, statut_realisation, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart';
+    const pageSize = 1000;
+    const all: Course[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase.from('courses').select(cols).order('date_heure').range(offset, offset + pageSize - 1);
+      if (error || !data) break;
+      all.push(...(data as Course[]));
+      if (data.length < pageSize) break;
+    }
+    setCourses(all);
   }
 
   async function loadLignes() {
