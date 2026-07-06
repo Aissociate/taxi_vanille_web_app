@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { X, ChevronRight, ChevronLeft, Save, FileText, Check, Users, AlertTriangle } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
+import { mDateStr, fmtHM } from '../lib/mayotte';
 
 interface Ligne {
   id: string;
@@ -121,19 +122,19 @@ function getDaysInMonth(year: number, month: number): Date[] {
   const days: Date[] = [];
   const last = new Date(year, month + 1, 0).getDate();
   for (let d = 1; d <= last; d++) {
-    days.push(new Date(year, month, d));
+    // Ancre a MIDI : mDateStr (offset +3h Mayotte) tombe alors sur le bon jour
+    // calendaire quel que soit le fuseau du navigateur (metropole/Reunion).
+    days.push(new Date(year, month, d, 12, 0, 0));
   }
   return days;
 }
 
-// Cle de date en heure LOCALE (et non UTC). day.toISOString() decalait chaque
-// jour d'un cran a Mayotte (UTC+3), ce qui faisait deborder les courses de fin
-// de mois sur le mois suivant (ex: trajets affiches au 1er juillet en juin).
-function toLocalDateStr(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+// Cle de date en HEURE DE MAYOTTE (UTC+3 fixe), coherente avec le planning et
+// l'appli chauffeur. On ne se base plus sur l'heure locale du navigateur du
+// directeur (metropole/Reunion) : sinon les courses de bord de journee tombaient
+// sur le mauvais jour dans le rapport.
+function toLocalDateStr(d: Date | string): string {
+  return mDateStr(d);
 }
 
 // Meme logique de parsing que le planning (PlanningPage) pour rester coherent:
@@ -214,7 +215,7 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
       const buildTrips = (periodCourses: Course[], capacite: number): TripRow[] => {
         const byHour: Record<string, Course[]> = {};
         periodCourses.forEach(c => {
-          const h = parseCourseDate(c.date_heure).toTimeString().slice(0, 5);
+          const h = fmtHM(c.date_heure);
           if (!byHour[h]) byHour[h] = [];
           byHour[h].push(c);
         });

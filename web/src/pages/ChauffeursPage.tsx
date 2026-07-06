@@ -196,7 +196,7 @@ export function ChauffeursPage({ user, onNavigateToPage }: ChauffeursPageProps) 
                 </div>
               </div>
               <div className="ml-4 mt-0.5">
-                {c.telephone && <p className="text-xs text-gray-500">{c.telephone}</p>}
+                {c.vehicule_immatriculation && <p className="text-xs text-gray-500">{c.vehicule_immatriculation}</p>}
               </div>
             </button>
           ))}

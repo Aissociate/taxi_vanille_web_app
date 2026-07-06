@@ -227,13 +227,24 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function loadCourses() {
     const { from, to } = getDateRange();
-    const { data } = await supabase
-      .from('courses')
-      .select('*')
-      .gte('date_heure', from)
-      .lt('date_heure', to)
-      .order('date_heure');
-    if (data) setCourses(data);
+    // Supabase plafonne une requete a 1000 lignes. Une semaine peut depasser
+    // (ex. ~1400 courses) -> sans pagination, les derniers jours DISPARAISSENT
+    // du planning. On boucle par pages de 1000 jusqu'a tout charger.
+    const pageSize = 1000;
+    const all: Course[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from('courses')
+        .select('*')
+        .gte('date_heure', from)
+        .lt('date_heure', to)
+        .order('date_heure')
+        .range(offset, offset + pageSize - 1);
+      if (error || !data) break;
+      all.push(...(data as Course[]));
+      if (data.length < pageSize) break;
+    }
+    setCourses(all);
   }
 
   async function loadAstreintes() {
