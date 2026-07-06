@@ -22,6 +22,7 @@ import { DebugAIPage } from './pages/DebugAIPage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { BugReportButton } from './components/BugReportButton';
 import MobileApp from './mobile/MobileApp';
+import { Capacitor } from '@capacitor/core';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
   state = { hasError: false, error: '' };
@@ -53,7 +54,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 }
 
 function App() {
-  if (window.location.pathname.startsWith('/mobile')) {
+  // Dans l'app native (APK chauffeur), on demarre toujours en mode mobile,
+  // quel que soit le chemin initial de la WebView. En navigateur, on garde la
+  // detection par URL (/mobile) pour le tableau de bord directeur.
+  if (Capacitor.isNativePlatform() || window.location.pathname.startsWith('/mobile')) {
     return <MobileApp />;
   }
   const { user, loading, signIn, signUp, signOut } = useAuth();
