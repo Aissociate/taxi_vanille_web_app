@@ -198,7 +198,10 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
 
   const generateData = useCallback(() => {
     const days = getDaysInMonth(year, month - 1);
-    const ligneCourses = courses.filter(c => c.ligne_id === selectedLigneId);
+    // Cloisonnement : le rapport ne compte QUE les courses de CE client (et de la
+    // ligne choisie). Sans le filtre client, deux clients partageant une ligne se
+    // retrouvaient mutuellement dans leurs rapports.
+    const ligneCourses = courses.filter(c => c.ligne_id === selectedLigneId && c.client_id === clientId);
     const feriesDates = new Set(joursFeries.map(jf => jf.date));
     const feriesMap = Object.fromEntries(joursFeries.map(jf => [jf.date, jf.intitule]));
 
@@ -385,24 +388,40 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
     };
   }, [daysData]);
 
-  async function handleSaveDraft() {
+  function buildReportPayload(statut: 'brouillon' | 'finalise') {
+    return {
+      client_id: clientId,
+      ligne_id: selectedLigneId || null,
+      mois: `${year}-${month.toString().padStart(2, '0')}-01`,
+      titre: `${selectedLigne?.code || ''} - Statistiques ${MONTHS_FR[month - 1]} ${year} - ${clientNom}`,
+      statut,
+      data_matin: daysData.map(d => ({ date: d.date, ...d.matin })),
+      data_apres_midi: daysData.map(d => ({ date: d.date, ...d.soir })),
+      data_journee: daysData.map(d => ({ date: d.date, label: d.label, jour_semaine: d.jour_semaine, is_ferie: d.is_ferie, ferie_intitule: d.ferie_intitule, ...d.journee })),
+      data_trajets_matin: daysData.flatMap(d => d.matin.trips.map(t => ({ date: d.date, ...t }))),
+      data_trajets_aprem: daysData.flatMap(d => d.soir.trips.map(t => ({ date: d.date, ...t }))),
+      metadata: { capacite_matin: capaciteMatin, capacite_aprem: capaciteAprem, ligne_code: selectedLigne?.code, ligne_depart: selectedLigne?.depart, ligne_arrivee: selectedLigne?.arrivee, weekly: weeklySummaries, monthly: monthlySummary },
+      user_id: user.id,
+    };
+  }
+
+  // UPSERT logique : une SEULE ligne par (client, ligne, mois). Sauver un brouillon
+  // puis finaliser met a jour la meme ligne au lieu d'en creer une nouvelle
+  // -> plus de doublons dans data_report_client_consolidated.
+  async function saveReport(statut: 'brouillon' | 'finalise') {
     setSaving(true);
     try {
-      const titre = `${selectedLigne?.code || ''} - Statistiques ${MONTHS_FR[month - 1]} ${year} - ${clientNom}`;
-      await supabase.from('data_report_client_consolidated').insert({
-        client_id: clientId,
-        ligne_id: selectedLigneId || null,
-        mois: `${year}-${month.toString().padStart(2, '0')}-01`,
-        titre,
-        statut: 'brouillon',
-        data_matin: daysData.map(d => ({ date: d.date, ...d.matin })),
-        data_apres_midi: daysData.map(d => ({ date: d.date, ...d.soir })),
-        data_journee: daysData.map(d => ({ date: d.date, label: d.label, jour_semaine: d.jour_semaine, is_ferie: d.is_ferie, ferie_intitule: d.ferie_intitule, ...d.journee })),
-        data_trajets_matin: daysData.flatMap(d => d.matin.trips.map(t => ({ date: d.date, ...t }))),
-        data_trajets_aprem: daysData.flatMap(d => d.soir.trips.map(t => ({ date: d.date, ...t }))),
-        metadata: { capacite_matin: capaciteMatin, capacite_aprem: capaciteAprem, ligne_code: selectedLigne?.code, ligne_depart: selectedLigne?.depart, ligne_arrivee: selectedLigne?.arrivee, weekly: weeklySummaries, monthly: monthlySummary },
-        user_id: user.id,
-      });
+      const payload = buildReportPayload(statut);
+      let q = supabase.from('data_report_client_consolidated').select('id')
+        .eq('client_id', clientId).eq('mois', payload.mois);
+      q = selectedLigneId ? q.eq('ligne_id', selectedLigneId) : q.is('ligne_id', null);
+      const { data: existingRows } = await q.order('created_at', { ascending: false }).limit(1);
+      const existingId = existingRows?.[0]?.id as string | undefined;
+      if (existingId) {
+        await supabase.from('data_report_client_consolidated').update(payload).eq('id', existingId);
+      } else {
+        await supabase.from('data_report_client_consolidated').insert(payload);
+      }
       setSaved(true);
       onSaved();
     } finally {
@@ -410,30 +429,8 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
     }
   }
 
-  async function handleFinalizeReport() {
-    setSaving(true);
-    try {
-      const titre = `${selectedLigne?.code || ''} - Statistiques ${MONTHS_FR[month - 1]} ${year} - ${clientNom}`;
-      await supabase.from('data_report_client_consolidated').insert({
-        client_id: clientId,
-        ligne_id: selectedLigneId || null,
-        mois: `${year}-${month.toString().padStart(2, '0')}-01`,
-        titre,
-        statut: 'finalise',
-        data_matin: daysData.map(d => ({ date: d.date, ...d.matin })),
-        data_apres_midi: daysData.map(d => ({ date: d.date, ...d.soir })),
-        data_journee: daysData.map(d => ({ date: d.date, label: d.label, jour_semaine: d.jour_semaine, is_ferie: d.is_ferie, ferie_intitule: d.ferie_intitule, ...d.journee })),
-        data_trajets_matin: daysData.flatMap(d => d.matin.trips.map(t => ({ date: d.date, ...t }))),
-        data_trajets_aprem: daysData.flatMap(d => d.soir.trips.map(t => ({ date: d.date, ...t }))),
-        metadata: { capacite_matin: capaciteMatin, capacite_aprem: capaciteAprem, ligne_code: selectedLigne?.code, ligne_depart: selectedLigne?.depart, ligne_arrivee: selectedLigne?.arrivee, weekly: weeklySummaries, monthly: monthlySummary },
-        user_id: user.id,
-      });
-      setSaved(true);
-      onSaved();
-    } finally {
-      setSaving(false);
-    }
-  }
+  const handleSaveDraft = () => saveReport('brouillon');
+  const handleFinalizeReport = () => saveReport('finalise');
 
   function renderDayTable(days: DayData[], title: string) {
     return (

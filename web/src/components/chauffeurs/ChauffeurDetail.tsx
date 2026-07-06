@@ -94,6 +94,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   const [avances, setAvances] = useState<Avance[]>([]);
   const [factures, setFactures] = useState<Facture[]>([]);
   const [tarifPlages, setTarifPlages] = useState<TarifPlage[]>([]);
+  const [feriesDates, setFeriesDates] = useState<Set<string>>(new Set());
   const [kilometrage, setKilometrage] = useState<KilometrageEntry[]>([]);
   const [astreinteSessions, setAstreinteSessions] = useState<AstreinteSession[]>([]);
   const [courseExecutions, setCourseExecutions] = useState<CourseExecution[]>([]);
@@ -190,8 +191,12 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   }
 
   async function loadTarifs() {
-    const { data } = await supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif, ligne_id');
+    const [{ data }, { data: feries }] = await Promise.all([
+      supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif, ligne_id'),
+      supabase.from('jours_feries').select('date'),
+    ]);
     if (data) setTarifPlages(data);
+    if (feries) setFeriesDates(new Set(feries.map((f: { date: string }) => f.date)));
   }
 
   async function loadDocuments() {
@@ -303,30 +308,30 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   const nbIncidents = courses.filter(c => c.statut_realisation === 'annule').length;
 
   function getTarifForCourse(course: Course): number {
-    if (course.montant > 0) return course.montant;
+    if (course.montant > 0) return course.montant; // prix autoritatif (trigger tarif_course)
     if (!course.date_heure) return 0;
-    const d = new Date(course.date_heure);
-    if (isNaN(d.getTime())) return 0;
-    const dow = d.getDay();
+    // Jour/heure en heure de MAYOTTE (pas le fuseau du navigateur) + jours feries + astreinte.
+    const p = mParts(course.date_heure);
     let typeJour = 'lun_ven';
-    if (dow === 6) typeJour = 'samedi';
-    else if (dow === 0) typeJour = 'dimanche';
+    if ((course as { is_astreinte?: boolean }).is_astreinte) typeJour = 'astreinte';
+    else if (feriesDates.has(mDateStr(course.date_heure))) typeJour = 'feries';
+    else if (p.dow === 6) typeJour = 'samedi';
+    else if (p.dow === 0) typeJour = 'dimanche';
     const toMinutes = (hhmm: string) => {
       const [h, mi] = (hhmm || '00:00').split(':').map(Number);
       return (h || 0) * 60 + (mi || 0);
     };
-    const minutes = d.getHours() * 60 + d.getMinutes();
-    const matchesTime = (p: TarifPlage) => {
-      if (p.type_jour !== typeJour) return false;
-      const start = toMinutes(p.heure_debut);
-      const end = toMinutes(p.heure_fin);
+    const minutes = p.h * 60 + p.mi;
+    const matchesTime = (pl: TarifPlage) => {
+      if (pl.type_jour !== typeJour) return false;
+      const start = toMinutes(pl.heure_debut);
+      const end = toMinutes(pl.heure_fin);
       return start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
     };
-    // Prefer ligne-specific tarif, fall back to generic
-    const ligneMatch = tarifPlages.find(p => matchesTime(p) && p.ligne_id === course.ligne_id);
-    const genericMatch = tarifPlages.find(p => matchesTime(p) && !p.ligne_id);
-    const plage = ligneMatch || genericMatch;
-    return parseFloat(String(plage?.tarif ?? 0)) || 0;
+    // Une seule plage, la bonne : specifique a la ligne d'abord, sinon generique.
+    const ligneMatch = tarifPlages.find(pl => matchesTime(pl) && pl.ligne_id === course.ligne_id);
+    const genericMatch = tarifPlages.find(pl => matchesTime(pl) && !pl.ligne_id);
+    return parseFloat(String((ligneMatch || genericMatch)?.tarif ?? 0)) || 0;
   }
 
   const caProjection = coursesTerminees.reduce((sum, c) => sum + getTarifForCourse(c), 0);

@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { Receipt, Plus, X, ChevronLeft, ChevronRight, Eye, Check, Trash2, List, Columns3, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
+import { mParts, mDateStr, mMidnightISO } from '../lib/mayotte';
 
 interface LigneSupp {
   libelle: string;
@@ -387,14 +388,16 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     const [y, m] = moisReference.slice(0, 7).split('-').map(Number);
     const lastDay = new Date(y, m, 0).getDate();
     const moisEnd = `${y}-${String(m).padStart(2, '0')}-${lastDay}`;
-    // Bornes des courses en instant LOCAL (mois de Mayotte) et non en UTC naif,
-    // sinon une course du 1er a 01:30 locale basculait sur le mois precedent.
-    const debutInstant = new Date(y, m - 1, 1).toISOString();
-    const finInstant = new Date(y, m, 1).toISOString(); // 1er du mois suivant, exclu
+    // Bornes du mois en MINUIT de Mayotte (instants absolus) -> memes journees que
+    // le planning et l'appli chauffeur, quel que soit le fuseau du navigateur.
+    const nextY = m === 12 ? y + 1 : y;
+    const nextM = m === 12 ? 1 : m + 1;
+    const debutInstant = mMidnightISO(moisStart);
+    const finInstant = mMidnightISO(`${nextY}-${String(nextM).padStart(2, '0')}-01`);
 
-    const [coursesRes, kmRes, plagesRes, avancesRes, kmAndroidRes] = await Promise.all([
+    const [coursesRes, kmRes, plagesRes, avancesRes, kmAndroidRes, feriesRes] = await Promise.all([
       supabase.from('courses')
-        .select('id, date_heure, periode, statut_planification, statut_realisation, duree_minutes, depart, arrivee, ligne_id, lignes(nom)')
+        .select('id, date_heure, periode, statut_planification, statut_realisation, duree_minutes, depart, arrivee, ligne_id, montant, is_astreinte, lignes(nom)')
         .eq('chauffeur_id', chauffeurId)
         .eq('statut_realisation', 'termine')
         .gte('date_heure', debutInstant)
@@ -415,6 +418,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         .eq('chauffeur_id', chauffeurId)
         .eq('mois', moisStart.slice(0, 7))
         .order('created_at', { ascending: true }),
+      supabase.from('jours_feries')
+        .select('date')
+        .gte('date', moisStart)
+        .lte('date', moisEnd),
     ]);
 
     // Valeurs par defaut : uniquement pour une NOUVELLE facture. Pour une facture
@@ -449,36 +456,15 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       if (heureAstreinteTarif) setTarifHeureAstreinte(heureAstreinteTarif.valeur);
     }
 
-    // Build dynamic plage lookup from tarif_plages
+    // Jours feries du mois (cle "YYYY-MM-DD") pour tarifer au bon tarif ferie.
     const plages = plagesRes.data || [];
+    const feries = new Set((feriesRes.data || []).map((f: { date: string }) => f.date));
 
-    // Group plages by type_jour
-    const plagesLunVen = plages.filter(p => p.type_jour === 'lun_ven').sort((a, b) => a.heure_debut.localeCompare(b.heure_debut));
-    const plagesSamedi = plages.filter(p => p.type_jour === 'samedi').sort((a, b) => a.heure_debut.localeCompare(b.heure_debut));
-    const plagesDimanche = plages.filter(p => p.type_jour === 'dimanche' || p.type_jour === 'feries').sort((a, b) => a.heure_debut.localeCompare(b.heure_debut));
-    const plagesAstreinte = plages.filter(p => p.type_jour === 'astreinte').sort((a, b) => a.heure_debut.localeCompare(b.heure_debut));
-
-    // Helper: parse "HH:MM" to minutes since midnight
-    const toMinutes = (hhmm: string) => {
-      const [h, mi] = (hhmm || '00:00').split(':').map(Number);
-      return (h || 0) * 60 + (mi || 0);
-    };
-
-    // Find the matching plage tarif for a given time within a set of plages
-    const findPlageForTime = (minutesSinceMidnight: number, plagesList: typeof plages) => {
-      for (const p of plagesList) {
-        const start = toMinutes(p.heure_debut);
-        const end = toMinutes(p.heure_fin);
-        if (start <= end) {
-          if (minutesSinceMidnight >= start && minutesSinceMidnight < end) return p;
-        } else {
-          if (minutesSinceMidnight >= start || minutesSinceMidnight < end) return p;
-        }
-      }
-      return null;
-    };
-
-    // Compute average tarif per type for the summary display
+    // Group plages by type_jour (uniquement pour le tarif MOYEN d'affichage si 0 course)
+    const plagesLunVen = plages.filter(p => p.type_jour === 'lun_ven');
+    const plagesSamedi = plages.filter(p => p.type_jour === 'samedi');
+    const plagesDimanche = plages.filter(p => p.type_jour === 'dimanche' || p.type_jour === 'feries');
+    const plagesAstreinte = plages.filter(p => p.type_jour === 'astreinte');
     const avgTarif = (list: typeof plages) => list.length > 0 ? list.reduce((s, p) => s + p.tarif, 0) / list.length : 0;
     const tarifJour = avgTarif(plagesLunVen);
     const tarifSam = avgTarif(plagesSamedi);
@@ -492,43 +478,23 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     const detailList: CourseDetail[] = [];
 
     courses.forEach(c => {
-      const dt = new Date(c.date_heure);
-      const dayOfWeek = dt.getDay(); // 0=dim, 6=sam
-      const minutesOfDay = dt.getHours() * 60 + dt.getMinutes();
+      const p = mParts(c.date_heure);                          // jour/heure en Mayotte
+      const isFerie = feries.has(mDateStr(c.date_heure));
+      const montant = (c as { montant?: number }).montant || 0; // prix autoritatif (trigger tarif_course)
 
       let cat = '';
       if (c.statut_planification === 'non_planifie') {
-        nonPlanifie++;
-        const matchedPlage = findPlageForTime(minutesOfDay, plagesLunVen);
-        totalNonPlanifie += matchedPlage?.tarif || tarifJour;
-        cat = 'Non planifie';
-      } else if (c.periode === 'astreinte') {
-        astreinte++;
-        const matchedPlage = findPlageForTime(minutesOfDay, plagesAstreinte);
-        totalAstreinte += matchedPlage?.tarif || tarifAstr;
-        cat = 'Astreinte';
-      } else if (dayOfWeek === 0) {
-        dimanche++;
-        const matchedPlage = findPlageForTime(minutesOfDay, plagesDimanche);
-        totalDimanche += matchedPlage?.tarif || tarifDim;
-        cat = 'Dimanche';
-      } else if (dayOfWeek === 6) {
-        samedi++;
-        const matchedPlage = findPlageForTime(minutesOfDay, plagesSamedi);
-        totalSamedi += matchedPlage?.tarif || tarifSam;
-        cat = 'Samedi';
+        nonPlanifie++; totalNonPlanifie += montant; cat = 'Non planifie';
+      } else if ((c as { is_astreinte?: boolean }).is_astreinte) {
+        astreinte++; totalAstreinte += montant; cat = 'Astreinte';
+      } else if (isFerie || p.dow === 0) {                     // ferie ou dimanche -> 27,5
+        dimanche++; totalDimanche += montant; cat = isFerie ? 'Ferie' : 'Dimanche';
+      } else if (p.dow === 6) {
+        samedi++; totalSamedi += montant; cat = 'Samedi';
+      } else if (p.h >= 19) {                                  // lun-ven soir
+        semaineNuit++; totalSemaineNuit += montant; cat = 'Semaine nuit';
       } else {
-        // Lun-Ven: match the exact plage to determine tarif
-        const matchedPlage = findPlageForTime(minutesOfDay, plagesLunVen);
-        if (matchedPlage && matchedPlage.libelle?.toLowerCase().includes('nuit')) {
-          semaineNuit++;
-          totalSemaineNuit += matchedPlage.tarif;
-          cat = 'Semaine nuit';
-        } else {
-          semaineJour++;
-          totalSemaineJour += matchedPlage?.tarif || tarifJour;
-          cat = 'Semaine jour';
-        }
+        semaineJour++; totalSemaineJour += montant; cat = 'Semaine jour';
       }
 
       detailList.push({
