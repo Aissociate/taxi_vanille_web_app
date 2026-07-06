@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
+    "@capacitor/core": "^8.4.1",
+    "@capgo/capacitor-updater": "^8.50.2",
     "@supabase/supabase-js": "^2.57.4",
     "@types/leaflet": "^1.9.21",
     "html2canvas": "^1.4.1",
