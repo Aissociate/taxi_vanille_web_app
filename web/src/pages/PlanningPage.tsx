@@ -1865,13 +1865,16 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
         // Calendrier jour-par-jour (cible de duplication). Les jours cochés
         // alimentent dupTargetDates ('YYYY-MM-DD'), gérés par handleDuplicate.
-        const calFirst = new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth(), 1);
+        // Ancre a MIDI : la cle du jour (toLocalDateStr = jour de Mayotte) tombe alors
+        // sur le meme jour que celui AFFICHE (d.getDate()), quel que soit le fuseau du
+        // navigateur. Sans ca, sur un PC hors Mayotte, cocher "le 1er" dupliquait vers
+        // le 30 du mois precedent (calendrier decale d'un jour).
+        const calFirst = new Date(dupCalMonth.getFullYear(), dupCalMonth.getMonth(), 1, 12);
         const calDays: Date[] = [];
         for (let d = new Date(calFirst); d.getMonth() === calFirst.getMonth(); d.setDate(d.getDate() + 1)) calDays.push(new Date(d));
         const leadBlanks = (calFirst.getDay() || 7) - 1; // lundi = 0
-        const dupWeekStart = getMonday(currentDate);
-        const dupWeekEnd = new Date(dupWeekStart); dupWeekEnd.setDate(dupWeekEnd.getDate() + 7);
-        const isSourceDay = (d: Date) => view === 'jour' ? isSameDay(d, currentDate) : (d >= dupWeekStart && d < dupWeekEnd);
+        // Jour(s) source (a NE PAS cocher) : meme jour, ou meme semaine de Mayotte.
+        const isSourceDay = (d: Date) => view === 'jour' ? isSameDay(d, currentDate) : mMondayStr(d) === mMondayStr(currentDate);
         const toggleDay = (d: Date) => {
           const key = toLocalDateStr(d);
           setDupTargetDates(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key].sort());
