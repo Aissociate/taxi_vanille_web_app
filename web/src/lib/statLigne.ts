@@ -125,9 +125,11 @@ interface CourseRaw {
   course_executions: { heure_debut: string | null; heure_fin: string | null }[] | null;
 }
 
+// `courses` a deux FK vers `chauffeurs` (chauffeur_id + coordinateur_id) : on
+// desambiguise l'embed via le nom de contrainte, sinon PostgREST refuse.
 const COURSE_SELECT =
   'id,date_heure,depart,passagers_depart,passagers_arrivee,duree_minutes,statut_realisation,notes,' +
-  'chauffeurs(nom,prenom,vehicule_places),course_executions(heure_debut,heure_fin)';
+  'chauffeurs!courses_chauffeur_id_fkey(nom,prenom,vehicule_places),course_executions(heure_debut,heure_fin)';
 
 /** Une course -> valeurs de base d'une ligne du tableau. */
 function courseToBase(c: CourseRaw): Cellules {
