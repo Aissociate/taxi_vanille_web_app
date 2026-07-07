@@ -15,6 +15,7 @@ import {
   MapPin,
   Coins,
   Map,
+  BarChart3,
   Code2,
   Bot,
   AlertTriangle,
@@ -32,6 +33,7 @@ export type Page =
   | 'clients'
   | 'incidents'
   | 'facturation'
+  | 'stats-ligne'
   | 'logs'
   | 'param-entreprise'
   | 'param-chauffeurs'
@@ -58,6 +60,7 @@ const mainItems = [
   { id: 'clients' as Page, label: 'Clients', icon: UserCircle },
   { id: 'incidents' as Page, label: 'Incidents', icon: AlertTriangle },
   { id: 'facturation' as Page, label: 'Facturation', icon: Receipt },
+  { id: 'stats-ligne' as Page, label: 'Stats par ligne', icon: BarChart3 },
   { id: 'logs' as Page, label: 'Logs', icon: ScrollText },
   { id: 'developpement' as Page, label: 'Developpement', icon: Code2 },
 ];

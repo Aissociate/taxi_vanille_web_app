@@ -7,6 +7,7 @@ import { PlanningPage } from './pages/PlanningPage';
 import { ChauffeursPage } from './pages/ChauffeursPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { FacturationPage } from './pages/FacturationPage';
+import { FacturationLignePage } from './pages/FacturationLignePage';
 import { LogsPage } from './pages/LogsPage';
 import { EntreprisePage } from './pages/settings/EntreprisePage';
 import { ParamChauffeursPage } from './pages/settings/ParamChauffeursPage';
@@ -95,6 +96,7 @@ function App() {
       case 'clients': return <ClientsPage user={user!} />;
       case 'incidents': return <IncidentsPage user={user!} />;
       case 'facturation': return <FacturationPage user={user!} />;
+      case 'stats-ligne': return <FacturationLignePage user={user!} />;
       case 'logs': return <LogsPage user={user!} />;
       case 'param-entreprise': return <EntreprisePage user={user!} />;
       case 'param-chauffeurs': return <ParamChauffeursPage />;
