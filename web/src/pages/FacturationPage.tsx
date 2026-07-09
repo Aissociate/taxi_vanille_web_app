@@ -362,6 +362,8 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   // #5 : forfait coordinateur en jour de semaine (lun-ven), meme logique que sam/dim.
   const [nbJoursCoordSemaine, setNbJoursCoordSemaine] = useState((facture as any)?.nb_jours_coordinateur_semaine || 0);
   const [forfaitCoordSemaine, setForfaitCoordSemaine] = useState((facture as any)?.forfait_coordinateur_semaine || 150);
+  // #6 : ventilation du nombre de trajets par plage tarifaire.
+  const [plagesBreakdown, setPlagesBreakdown] = useState<{ label: string; count: number; total: number }[]>([]);
 
   const [locationVehicule, setLocationVehicule] = useState(facture?.location_vehicule || false);
   const [tarifLocation, setTarifLocation] = useState(facture?.tarif_location || 0);
@@ -411,7 +413,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         .eq('chauffeur_id', chauffeurId)
         .eq('mois', moisStart)
         .maybeSingle(),
-      supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif, libelle'),
+      supabase.from('tarif_plages').select('id, type_jour, heure_debut, heure_fin, tarif, libelle, ligne_id, ordre'),
       supabase.from('chauffeur_avances')
         .select('montant')
         .eq('chauffeur_id', chauffeurId)
@@ -515,6 +517,37 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     });
 
     setCoursesDetail(detailList);
+
+    // #6 : ventilation du nombre de trajets par plage tarifaire. On rattache
+    // chaque course a UNE plage en repliquant la selection du trigger
+    // `tarif_course` (type de jour Mayotte + heure ; plage specifique a la ligne
+    // prioritaire, sinon `ordre` le plus petit) -> le decompte reconcilie avec
+    // le montant facture.
+    type PlageRow = { id: string; type_jour: string; heure_debut: string; heure_fin: string; libelle: string | null; ligne_id: string | null; ordre: number };
+    const plagesTyped = plages as unknown as PlageRow[];
+    const tally = new Map<string, { label: string; count: number; total: number }>();
+    courses.forEach(c => {
+      const p = mParts(c.date_heure);
+      const isFerie = feries.has(mDateStr(c.date_heure));
+      const montant = (c as { montant?: number }).montant || 0;
+      const typeJour = (c as { is_astreinte?: boolean }).is_astreinte ? 'astreinte'
+        : isFerie ? 'feries' : p.dow === 0 ? 'dimanche' : p.dow === 6 ? 'samedi' : 'lun_ven';
+      const hhmm = `${String(p.h).padStart(2, '0')}:${String(p.mi).padStart(2, '0')}`;
+      const match = plagesTyped
+        .filter(pl => pl.type_jour === typeJour && hhmm >= pl.heure_debut && hhmm < pl.heure_fin
+          && (pl.ligne_id === c.ligne_id || pl.ligne_id == null))
+        .sort((a, b) =>
+          (Number(b.ligne_id === c.ligne_id) - Number(a.ligne_id === c.ligne_id)) || (a.ordre - b.ordre))[0];
+      const key = match ? match.id : `none:${typeJour}`;
+      const label = match
+        ? `${typeJour} ${match.heure_debut}-${match.heure_fin}${match.libelle ? ' · ' + match.libelle : ''}`
+        : `${typeJour} (hors plage)`;
+      const cur = tally.get(key) || { label, count: 0, total: 0 };
+      cur.count += 1;
+      cur.total += montant;
+      tally.set(key, cur);
+    });
+    setPlagesBreakdown([...tally.values()].sort((a, b) => a.label.localeCompare(b.label)));
 
     setNbSemaineJour(semaineJour);
     setTarifSemaineJour(semaineJour > 0 ? totalSemaineJour / semaineJour : tarifJour);
@@ -784,6 +817,22 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
                   <input type="number" step="0.01" value={tarifNonPlanifie} onChange={(e) => setTarifNonPlanifie(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-teal-200 rounded-lg text-center text-teal-700 bg-teal-50/50 focus:ring-1 focus:ring-teal-400 outline-none" />
                   <span className="text-right font-bold text-gray-900">{montantNonPlanifie.toFixed(2)} EUR</span>
                 </div>
+
+                {/* #6 : ventilation par plage tarifaire (informatif, calcule) */}
+                {plagesBreakdown.length > 0 && (
+                  <div className="border-t border-gray-100 pt-2">
+                    <p className="text-[10px] text-gray-400 uppercase font-semibold mb-1.5">Ventilation par plage tarifaire</p>
+                    <div className="space-y-1">
+                      {plagesBreakdown.map((b) => (
+                        <div key={b.label} className="grid grid-cols-[1fr_70px_110px] gap-2 items-center text-xs">
+                          <span className="text-gray-600 capitalize">{b.label}</span>
+                          <span className="text-center font-medium text-gray-700 tabular-nums">{b.count} traj.</span>
+                          <span className="text-right text-gray-500 tabular-nums">{b.total.toFixed(2)} EUR</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Forfait coordinateur */}
                 {selectedChauffeur && chauffeurs.find(c => c.id === chauffeurId)?.code && (
