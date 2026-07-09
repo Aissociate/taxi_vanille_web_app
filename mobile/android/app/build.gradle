@@ -1,5 +1,15 @@
 apply plugin: 'com.android.application'
 
+// Keystore de release FIXE : garantit une signature stable d'un build a l'autre
+// et d'une machine a l'autre -> les futurs APK s'installent PAR-DESSUS sans
+// desinstaller. Les secrets sont dans mobile/android/keystore.properties,
+// JAMAIS commite (voir keystore.properties.example).
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
 android {
     namespace = "com.taxivanille.chauffeur"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,10 +26,24 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Si le keystore n'est pas configure sur cette machine, on retombe sur
+            // la signature debug pour ne pas bloquer le build (mais l'APK ne sera
+            // alors PAS installable par-dessus la version release).
+            signingConfig keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
 }

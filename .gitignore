@@ -36,3 +36,8 @@ mobile/android/app/build
 mobile/android/build
 mobile/android/local.properties
 mobile/android/app/release
+
+# Signature release — keystore + mots de passe (JAMAIS versionnes, a sauvegarder ailleurs)
+*.jks
+*.keystore
+mobile/android/keystore.properties
