@@ -149,8 +149,13 @@ function courseToBase(c: CourseRaw): Cellules {
   cells.temps_aller = c.duree_minutes != null ? String(c.duree_minutes) : '';
   const places = c.chauffeurs?.vehicule_places ?? 0;
   cells.capacite = places > 0 ? String(places) : DEFAULT_CAPACITE;
-  // Heure reelle / arrivee : les timestamps d'execution sont peu fiables
-  // (saisis en differe) -> on laisse vide, editable a la main.
+  // Trajet reellement effectue : on renseigne l'heure reelle de depart / arrivee
+  // depuis l'execution du chauffeur (course_executions). Ainsi un trajet effectue
+  // se distingue d'un trajet seulement planifie (avant : colonnes vides -> il
+  // "n'apparaissait pas" comme effectue). Les valeurs restent editables a la main.
+  const exec = c.course_executions?.[0];
+  if (exec?.heure_debut) cells.heure_reelle = fmtHM(exec.heure_debut);
+  if (exec?.heure_fin) cells.heure_arrivee = fmtHM(exec.heure_fin);
   void p;
   return cells;
 }
