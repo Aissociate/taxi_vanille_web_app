@@ -2,7 +2,11 @@ import { useState, useCallback } from 'react';
 import type { Chauffeur, UserRole } from './types';
 
 const SESSION_KEY = 'mobile_auth_session';
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+// Fenetre d'ouverture HORS-LIGNE sans re-saisir code+PIN. Volontairement longue
+// (terrain : reseau instable a Mayotte) et glissante -> tant que le chauffeur
+// utilise l'appli en ligne de temps en temps (voir refreshSessionExpiry), elle
+// ne l'oblige jamais a se reconnecter. Le credential reste le code + PIN.
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface StoredSession {
   chauffeur: Chauffeur;
@@ -51,6 +55,23 @@ export function clearAuth() {
   currentRole = null;
   localStorage.removeItem(SESSION_KEY);
   notify();
+}
+
+// Prolonge la fenetre hors-ligne a chaque usage reussi EN LIGNE : la session
+// expire 30 jours apres la derniere fois ou l'appli a pu joindre le serveur,
+// pas 30 jours apres le login. Un chauffeur actif n'est donc jamais deconnecte.
+export function refreshSessionExpiry() {
+  if (!currentChauffeur || !currentRole) return;
+  const session: StoredSession = {
+    chauffeur: currentChauffeur,
+    role: currentRole,
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  };
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Storage plein : sans effet, la session precedente reste valide.
+  }
 }
 
 export function useAuth() {

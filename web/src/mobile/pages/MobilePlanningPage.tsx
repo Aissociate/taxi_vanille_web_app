@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { LogOut, Clock, AlertTriangle, Calendar, ChevronDown, ChevronUp, RefreshCw, X } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { useAuth, clearAuth } from '../lib/store';
+import { useAuth, clearAuth, refreshSessionExpiry } from '../lib/store';
 import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue';
 import type { CourseExecution, Ligne } from '../lib/types';
 import MobileIncidentSheet from '../components/MobileIncidentSheet';
@@ -159,6 +159,14 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     const startOfDay = mMidnightISO(dayStr);
     const endOfDay = mMidnightISO(mAddDaysStr(dayStr, 1));
     const endOfTomorrow = mMidnightISO(mAddDaysStr(dayStr, 2));
+    const todayStr = localDayStr(today);
+    const online = isOnline();
+
+    // Cles de cache par chauffeur : le dernier planning connu doit survivre a une
+    // coupure reseau pour que l'app s'ouvre hors-ligne avec des donnees reelles.
+    const CK_TODAY = `planning_today_${chauffeur.id}`;
+    const CK_TOMORROW = `planning_tomorrow_${chauffeur.id}`;
+    const CK_SYNCED = `planning_synced_${chauffeur.id}`;
 
     // Drafts, replaced, cancelled and incident courses must never reach the driver
     const visibleCourses = () =>
@@ -166,53 +174,81 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
         .or('is_brouillon.is.null,is_brouillon.eq.false')
         .or('statut_realisation.is.null,and(statut_realisation.neq.remplace,statut_realisation.neq.annule,statut_realisation.neq.incident)');
 
-    const [todayRes, tomorrowRes] = await Promise.all([
-      visibleCourses().gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
-      visibleCourses().gte('date_heure', endOfDay).lt('date_heure', endOfTomorrow).order('date_heure', { ascending: true }),
-    ]);
+    let mergedToday: CourseWithDetails[] | null = null;
+    let tomorrow: TomorrowCourse[] | null = null;
 
-    if (todayRes.data) {
-      const { data: executions } = await supabase.from('course_executions').select('*').eq('chauffeur_id', chauffeur.id).in('course_id', todayRes.data.map((c) => c.id));
-      const merged = todayRes.data.map((course) => ({ ...course, execution: executions?.find((e) => e.course_id === course.id) || null }));
-      // Rafraichissement en arriere-plan : memoriser le scroll pour le restaurer.
-      if (background) pendingScrollRef.current = window.scrollY;
-      setCourses(merged as CourseWithDetails[]);
-      setLastSync(fmtHM(new Date()));
+    if (online) {
+      try {
+        const [todayRes, tomorrowRes] = await Promise.all([
+          visibleCourses().gte('date_heure', startOfDay).lt('date_heure', endOfDay).order('date_heure', { ascending: true }),
+          visibleCourses().gte('date_heure', endOfDay).lt('date_heure', endOfTomorrow).order('date_heure', { ascending: true }),
+        ]);
 
-      const astreinteCourses = todayRes.data.filter((c: any) => c.is_astreinte === true);
-      const todayStr = localDayStr(today);
-
-      // Also honor astreintes planned by the back-office in the dedicated
-      // `astreintes` table (not only courses flagged is_astreinte).
-      let plannedId: string | null = null;
-      if (isOnline()) {
-        const { data: planned } = await supabase
-          .from('astreintes')
-          .select('id')
-          .eq('chauffeur_id', chauffeur.id)
-          .or('is_brouillon.is.null,is_brouillon.eq.false')
-          .lte('date_debut', endOfDay)
-          .gte('date_fin', startOfDay)
-          .limit(1);
-        plannedId = planned?.[0]?.id ?? null;
-        cacheData(`astreinte_planned_${chauffeur.id}_${todayStr}`, plannedId);
-      } else {
-        plannedId = getCachedData<string | null>(`astreinte_planned_${chauffeur.id}_${todayStr}`) ?? null;
-      }
-      setPlannedAstreinteId(plannedId);
-
-      if (astreinteCourses.length > 0 || plannedId) {
-        setHasAstreinte(true);
-        if (isOnline()) {
-          const { data: session } = await supabase.from('astreinte_sessions').select('*').eq('chauffeur_id', chauffeur.id).eq('date', todayStr).maybeSingle();
-          if (session) { setAstreinteSession(session as AstreinteSession); cacheData(`astreinte_${chauffeur.id}_${todayStr}`, session); }
-        } else {
-          const cached = getCachedData<AstreinteSession>(`astreinte_${chauffeur.id}_${todayStr}`);
-          if (cached) setAstreinteSession(cached);
+        if (todayRes.data) {
+          const { data: executions } = await supabase.from('course_executions').select('*').eq('chauffeur_id', chauffeur.id).in('course_id', todayRes.data.map((c) => c.id));
+          mergedToday = todayRes.data.map((course) => ({ ...course, execution: executions?.find((e) => e.course_id === course.id) || null })) as CourseWithDetails[];
+          cacheData(CK_TODAY, mergedToday);
+          cacheData(CK_SYNCED, new Date().toISOString());
+          // On a joint le serveur : on repousse l'expiration de la session de 30j.
+          refreshSessionExpiry();
         }
+        if (tomorrowRes.data) {
+          tomorrow = tomorrowRes.data as TomorrowCourse[];
+          cacheData(CK_TOMORROW, tomorrow);
+        }
+      } catch {
+        // Echec reseau en cours de requete -> on bascule sur le cache ci-dessous.
       }
     }
-    if (tomorrowRes.data) setTomorrowCourses(tomorrowRes.data as TomorrowCourse[]);
+
+    // Hors-ligne ou echec reseau : relire le dernier planning mis en cache.
+    if (mergedToday == null) {
+      mergedToday = getCachedData<CourseWithDetails[]>(CK_TODAY) ?? [];
+      const ts = getCachedData<string>(CK_SYNCED);
+      if (ts) setLastSync(fmtHM(new Date(ts)));
+    } else {
+      setLastSync(fmtHM(new Date()));
+    }
+    if (tomorrow == null) {
+      tomorrow = getCachedData<TomorrowCourse[]>(CK_TOMORROW) ?? [];
+    }
+
+    // Rafraichissement en arriere-plan : memoriser le scroll pour le restaurer.
+    if (background) pendingScrollRef.current = window.scrollY;
+    setCourses(mergedToday);
+    setTomorrowCourses(tomorrow);
+
+    // Astreinte : calcul sur le planning courant (en ligne comme hors-ligne),
+    // en tenant compte des astreintes planifiees cote back-office.
+    const astreinteCourses = mergedToday.filter((c) => c.is_astreinte === true);
+    let plannedId: string | null = null;
+    if (online) {
+      const { data: planned } = await supabase
+        .from('astreintes')
+        .select('id')
+        .eq('chauffeur_id', chauffeur.id)
+        .or('is_brouillon.is.null,is_brouillon.eq.false')
+        .lte('date_debut', endOfDay)
+        .gte('date_fin', startOfDay)
+        .limit(1);
+      plannedId = planned?.[0]?.id ?? null;
+      cacheData(`astreinte_planned_${chauffeur.id}_${todayStr}`, plannedId);
+    } else {
+      plannedId = getCachedData<string | null>(`astreinte_planned_${chauffeur.id}_${todayStr}`) ?? null;
+    }
+    setPlannedAstreinteId(plannedId);
+
+    if (astreinteCourses.length > 0 || plannedId) {
+      setHasAstreinte(true);
+      if (online) {
+        const { data: session } = await supabase.from('astreinte_sessions').select('*').eq('chauffeur_id', chauffeur.id).eq('date', todayStr).maybeSingle();
+        if (session) { setAstreinteSession(session as AstreinteSession); cacheData(`astreinte_${chauffeur.id}_${todayStr}`, session); }
+      } else {
+        const cached = getCachedData<AstreinteSession>(`astreinte_${chauffeur.id}_${todayStr}`);
+        if (cached) setAstreinteSession(cached);
+      }
+    }
+
     setLoading(false);
   };
 
