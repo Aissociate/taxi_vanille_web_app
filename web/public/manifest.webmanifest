@@ -1,0 +1,17 @@
+{
+  "name": "Taxi Vanille",
+  "short_name": "Taxi Vanille",
+  "description": "App chauffeur Taxi Vanille — planning, courses, incidents.",
+  "lang": "fr",
+  "start_url": "/mobile",
+  "scope": "/mobile",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ea580c",
+  "icons": [
+    { "src": "/icon-taxi.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-taxi.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

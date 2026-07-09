@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#EA580C"/>
+  <!-- enseigne toit -->
+  <rect x="228" y="150" width="56" height="27" rx="6" fill="#1F2937"/>
+  <text x="256" y="170" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#FDE68A" text-anchor="middle">TAXI</text>
+  <!-- cabine -->
+  <path d="M168 250 L206 190 L306 190 L344 250 Z" fill="#FFFFFF"/>
+  <!-- vitres -->
+  <path d="M216 244 L238 202 L250 202 L250 244 Z" fill="#93C5FD"/>
+  <path d="M262 244 L262 202 L298 202 L320 244 Z" fill="#93C5FD"/>
+  <!-- carrosserie -->
+  <rect x="96" y="248" width="320" height="86" rx="22" fill="#FFFFFF"/>
+  <!-- bande damier taxi -->
+  <g fill="#1F2937">
+    <rect x="120" y="286" width="18" height="18"/>
+    <rect x="156" y="286" width="18" height="18"/>
+    <rect x="192" y="286" width="18" height="18"/>
+    <rect x="228" y="286" width="18" height="18"/>
+    <rect x="264" y="286" width="18" height="18"/>
+    <rect x="300" y="286" width="18" height="18"/>
+    <rect x="336" y="286" width="18" height="18"/>
+    <rect x="138" y="304" width="18" height="18"/>
+    <rect x="174" y="304" width="18" height="18"/>
+    <rect x="210" y="304" width="18" height="18"/>
+    <rect x="246" y="304" width="18" height="18"/>
+    <rect x="282" y="304" width="18" height="18"/>
+    <rect x="318" y="304" width="18" height="18"/>
+  </g>
+  <!-- phare -->
+  <rect x="398" y="262" width="16" height="20" rx="4" fill="#FDE68A"/>
+  <!-- roues -->
+  <circle cx="170" cy="340" r="40" fill="#1F2937"/>
+  <circle cx="170" cy="340" r="17" fill="#D1D5DB"/>
+  <circle cx="342" cy="340" r="40" fill="#1F2937"/>
+  <circle cx="342" cy="340" r="17" fill="#D1D5DB"/>
+</svg>
