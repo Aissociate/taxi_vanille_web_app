@@ -14,6 +14,20 @@ import { downloadSpreadsheet, type SheetData, type CellValue } from '../lib/spre
 import { mDateStr, mNoon, mAddDaysStr, mMondayStr, fmtDateLong, fmtMonthYear, mParts } from '../lib/mayotte';
 
 type ViewMode = 'jour' | 'semaine' | 'mois';
+type SortMode = 'heure' | 'chauffeur';
+
+// Tri des lignes de la vue jour : par heure theorique (defaut) ou par chauffeur
+// (code + nom, cf. cellule `chauffeur`). Tri stable, secondaire sur l'heure.
+function sortRows(rows: StatRow[], mode: SortMode): StatRow[] {
+  const arr = [...rows];
+  if (mode === 'chauffeur') {
+    arr.sort((a, b) =>
+      a.values.chauffeur.localeCompare(b.values.chauffeur) || a.sortKey - b.sortKey);
+  } else {
+    arr.sort((a, b) => a.sortKey - b.sortKey || a.values.arret.localeCompare(b.values.arret));
+  }
+  return arr;
+}
 
 interface Props {
   user: User;
@@ -65,6 +79,7 @@ export function FacturationLignePage({ user }: Props) {
   const [lignes, setLignes] = useState<LigneLite[]>([]);
   const [ligneId, setLigneId] = useState('');
   const [view, setView] = useState<ViewMode>('jour');
+  const [sortMode, setSortMode] = useState<SortMode>('heure');
   const [anchor, setAnchor] = useState(() => mDateStr(new Date()));
 
   const [rows, setRows] = useState<StatRow[]>([]);
@@ -96,7 +111,7 @@ export function FacturationLignePage({ user }: Props) {
     setLoading(true);
     try {
       if (view === 'jour') {
-        setRows(await loadDay(ligneId, anchor));
+        setRows(sortRows(await loadDay(ligneId, anchor), sortMode));
       } else {
         setPerDay(await loadRange(ligneId, jours));
       }
@@ -105,7 +120,14 @@ export function FacturationLignePage({ user }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [ligneId, view, anchor, jours]);
+  }, [ligneId, view, anchor, jours, sortMode]);
+
+  // Change le tri sans recharger : on re-trie les lignes deja en memoire (les
+  // index restent coherents avec les callbacks d'edition qui indexent `rows`).
+  function onSortChange(mode: SortMode) {
+    setSortMode(mode);
+    setRows((prev) => sortRows(prev, mode));
+  }
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -343,6 +365,8 @@ export function FacturationLignePage({ user }: Props) {
           totaux={totaux}
           nbModifs={nbModifs}
           saving={saving > 0}
+          sortMode={sortMode}
+          onSortChange={onSortChange}
           onCellChange={onCellChange}
           onCellCommit={onCellCommit}
           onDeleteRow={onDeleteRow}
@@ -363,6 +387,8 @@ interface DayTableProps {
   totaux: { montees: number; descentes: number; nonEff: number; retard: number; tauxMoyen: number; nb: number };
   nbModifs: number;
   saving: boolean;
+  sortMode: SortMode;
+  onSortChange: (m: SortMode) => void;
   onCellChange: (idx: number, champ: ChampId, value: string) => void;
   onCellCommit: (idx: number, champ: ChampId, value: string) => void;
   onDeleteRow: (row: StatRow) => void;
@@ -370,7 +396,7 @@ interface DayTableProps {
   onResetDay: () => void;
 }
 
-function DayTable({ rows, totaux, nbModifs, saving, onCellChange, onCellCommit, onDeleteRow, onAddRow, onResetDay }: DayTableProps) {
+function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCellChange, onCellCommit, onDeleteRow, onAddRow, onResetDay }: DayTableProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -380,6 +406,19 @@ function DayTable({ rows, totaux, nbModifs, saving, onCellChange, onCellCommit, 
           {saving && <span className="inline-flex items-center gap-1 text-gray-400"><Loader2 className="w-3 h-3 animate-spin" /> enregistrement...</span>}
         </div>
         <div className="flex items-center gap-2">
+          {/* Tri des lignes : par heure (defaut) ou par chauffeur (code + nom) */}
+          <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden mr-1">
+            {([['heure', 'Heure'], ['chauffeur', 'Chauffeur']] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => onSortChange(m)}
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${sortMode === m ? 'bg-amber-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                title={`Trier par ${label.toLowerCase()}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <button onClick={onResetDay} disabled={nbModifs === 0} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 transition-colors">
             <RotateCcw className="w-3.5 h-3.5" /> Reinitialiser le jour
           </button>

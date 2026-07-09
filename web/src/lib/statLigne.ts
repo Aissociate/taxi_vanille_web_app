@@ -121,7 +121,7 @@ interface CourseRaw {
   duree_minutes: number | null;
   statut_realisation: string | null;
   notes: string | null;
-  chauffeurs: { nom: string | null; prenom: string | null; vehicule_places: number | null } | null;
+  chauffeurs: { code: string | null; nom: string | null; prenom: string | null; vehicule_places: number | null } | null;
   course_executions: { heure_debut: string | null; heure_fin: string | null }[] | null;
 }
 
@@ -129,7 +129,7 @@ interface CourseRaw {
 // desambiguise l'embed via le nom de contrainte, sinon PostgREST refuse.
 const COURSE_SELECT =
   'id,date_heure,depart,passagers_depart,passagers_arrivee,duree_minutes,statut_realisation,notes,' +
-  'chauffeurs!courses_chauffeur_id_fkey(nom,prenom,vehicule_places),course_executions(heure_debut,heure_fin)';
+  'chauffeurs!courses_chauffeur_id_fkey(code,nom,prenom,vehicule_places),course_executions(heure_debut,heure_fin)';
 
 /** Une course -> valeurs de base d'une ligne du tableau. */
 function courseToBase(c: CourseRaw): Cellules {
@@ -137,7 +137,10 @@ function courseToBase(c: CourseRaw): Cellules {
   const p = mParts(c.date_heure);
   cells.arret = c.depart || '';
   cells.heure_theo = fmtHM(c.date_heure);
-  cells.chauffeur = `${c.chauffeurs?.nom || ''} ${c.chauffeurs?.prenom || ''}`.trim();
+  // Code chauffeur en prefixe (ex: "D5 - AMINA Selemani") -> visible dans la
+  // colonne Chauffeur, repris dans l'export, et exploitable pour le tri.
+  const chNom = `${c.chauffeurs?.nom || ''} ${c.chauffeurs?.prenom || ''}`.trim();
+  cells.chauffeur = [c.chauffeurs?.code, chNom].filter(Boolean).join(' - ');
   const nonEffectue = c.statut_realisation === 'annule' || c.statut_realisation === 'non_effectue';
   cells.non_effectue = nonEffectue ? '1' : '0';
   cells.montees = String(c.passagers_depart ?? 0);
