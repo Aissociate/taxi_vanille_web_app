@@ -1,0 +1,23 @@
+# Deploiement AUTOMATIQUE depuis GitHub (Netlify).
+# Objectif : remplacer le deploy Bolt qui ne suit pas `main`. Une fois le depot
+# Aissociate/taxi_vanille_web_app connecte dans Netlify, CHAQUE push sur `main`
+# reconstruit et deploie web/ automatiquement. GitHub redevient la source unique.
+#
+# Rien a configurer d'autre : build + variables publiques ci-dessous.
+[build]
+  base = "web"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Cles PUBLIQUES Supabase (anon) — deja presentes dans le bundle et .env.example.
+  # Requises au build, sinon createClient() plante (ecran blanc).
+  VITE_SUPABASE_URL = "https://decmcmviiknbkcsamuow.supabase.co"
+  VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlY21jbXZpaWtuYmtjc2FtdW93Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMTc1NjYsImV4cCI6MjA5NDY5MzU2Nn0.5LRx_pJbRREKrRKuFNy6JEfDWG7JZZJ-mCUFSWoSKoE"
+
+# SPA fallback (equivaut a web/public/_redirects)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
