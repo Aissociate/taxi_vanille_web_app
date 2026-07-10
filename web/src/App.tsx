@@ -21,8 +21,10 @@ import { CarteGPSPage } from './pages/CarteGPSPage';
 import { DeveloppementPage } from './pages/DeveloppementPage';
 import { DebugAIPage } from './pages/DebugAIPage';
 import { IncidentsPage } from './pages/IncidentsPage';
+import { TimerPage } from './pages/TimerPage';
 import { BugReportButton } from './components/BugReportButton';
 import MobileApp from './mobile/MobileApp';
+import TimerApp from './timer/TimerApp';
 
 // Detection de la plateforme native SANS importer @capacitor/core (sinon le
 // build web/admin exigerait ce paquet natif, absent de l'environnement Bolt).
@@ -66,6 +68,10 @@ function App() {
   // Dans l'app native (APK chauffeur), on demarre toujours en mode mobile,
   // quel que soit le chemin initial de la WebView. En navigateur, on garde la
   // detection par URL (/mobile) pour le tableau de bord directeur.
+  // App "Timer" (2e PWA, /timer) : totalement independante de l'app chauffeur.
+  if (window.location.pathname.startsWith('/timer')) {
+    return <TimerApp />;
+  }
   if (isNativePlatform() || window.location.pathname.startsWith('/mobile')) {
     return <MobileApp />;
   }
@@ -97,6 +103,7 @@ function App() {
       case 'incidents': return <IncidentsPage user={user!} />;
       case 'facturation': return <FacturationPage user={user!} />;
       case 'stats-ligne': return <FacturationLignePage user={user!} />;
+      case 'timer': return <TimerPage user={user!} />;
       case 'logs': return <LogsPage user={user!} />;
       case 'param-entreprise': return <EntreprisePage user={user!} />;
       case 'param-chauffeurs': return <ParamChauffeursPage />;

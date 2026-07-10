@@ -15,6 +15,20 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Taxi Vanille" />
     <link rel="apple-touch-icon" href="/icon-taxi.svg" />
+    <script>
+      // 2e PWA "Timer" (/timer) : bascule manifest + theme + icone AVANT que le
+      // navigateur evalue l'installabilite. L'app chauffeur (/, /mobile) garde
+      // le manifest orange par defaut.
+      if (location.pathname.indexOf('/timer') === 0) {
+        var _sw = function (sel, attr, val) { var e = document.querySelector(sel); if (e) e[attr] = val; };
+        _sw('link[rel="manifest"]', 'href', '/manifest-timer.webmanifest');
+        _sw('meta[name="theme-color"]', 'content', '#4f46e5');
+        _sw('link[rel="apple-touch-icon"]', 'href', '/icon-timer.svg');
+        _sw('link[rel="icon"]', 'href', '/icon-timer.svg');
+        _sw('meta[name="apple-mobile-web-app-title"]', 'content', 'Taxi Vanille Timer');
+        document.title = 'Taxi Vanille Timer';
+      }
+    </script>
     <meta property="og:image" content="https://bolt.new/static/og_default.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />

@@ -22,6 +22,7 @@ import {
   KeyRound,
   Smartphone,
   ExternalLink,
+  Timer,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -34,6 +35,7 @@ export type Page =
   | 'incidents'
   | 'facturation'
   | 'stats-ligne'
+  | 'timer'
   | 'logs'
   | 'param-entreprise'
   | 'param-chauffeurs'
@@ -61,6 +63,7 @@ const mainItems = [
   { id: 'incidents' as Page, label: 'Incidents', icon: AlertTriangle },
   { id: 'facturation' as Page, label: 'Facturation', icon: Receipt },
   { id: 'stats-ligne' as Page, label: 'Stats par ligne', icon: BarChart3 },
+  { id: 'timer' as Page, label: 'Timer', icon: Timer },
   { id: 'logs' as Page, label: 'Logs', icon: ScrollText },
   { id: 'developpement' as Page, label: 'Developpement', icon: Code2 },
 ];
@@ -168,6 +171,16 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
         >
           <Smartphone className="w-[18px] h-[18px]" />
           <span className="flex-1">App Chauffeur</span>
+          <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </a>
+        <a
+          href="/timer/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/[0.06] transition-all duration-150"
+        >
+          <Timer className="w-[18px] h-[18px]" />
+          <span className="flex-1">App Timer</span>
           <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
         </a>
         <button

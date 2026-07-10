@@ -1,0 +1,17 @@
+{
+  "name": "Taxi Vanille Timer",
+  "short_name": "TV Timer",
+  "description": "Mesure des temps de passage entre arrets (chauffeurs pilotes).",
+  "lang": "fr",
+  "start_url": "/timer",
+  "scope": "/timer",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#312e81",
+  "theme_color": "#4f46e5",
+  "icons": [
+    { "src": "/icon-timer.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-timer.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

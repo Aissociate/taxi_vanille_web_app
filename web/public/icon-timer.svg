@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#4f46e5"/>
+  <!-- couronne / bouton du haut -->
+  <rect x="226" y="112" width="60" height="40" rx="12" fill="#ffffff"/>
+  <!-- bouton lateral (start) -->
+  <rect x="386" y="176" width="46" height="26" rx="10" fill="#ffffff" transform="rotate(45 409 189)"/>
+  <!-- corps du chrono -->
+  <circle cx="256" cy="306" r="140" fill="#ffffff"/>
+  <circle cx="256" cy="306" r="140" fill="none" stroke="#c7d2fe" stroke-width="10"/>
+  <!-- marques 12/3/6/9 -->
+  <g fill="#4f46e5">
+    <rect x="250" y="182" width="12" height="26" rx="4"/>
+    <rect x="250" y="404" width="12" height="26" rx="4"/>
+    <rect x="132" y="300" width="26" height="12" rx="4"/>
+    <rect x="354" y="300" width="26" height="12" rx="4"/>
+  </g>
+  <!-- aiguille -->
+  <line x1="256" y1="306" x2="328" y2="234" stroke="#4f46e5" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="256" cy="306" r="16" fill="#4f46e5"/>
+</svg>
