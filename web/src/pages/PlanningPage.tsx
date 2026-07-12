@@ -14,6 +14,7 @@ interface Course {
   arrivee: string;
   statut_planification: string;
   statut_realisation: string;
+  statut?: string;
   montant: number;
   notes: string;
   chauffeur_id: string | null;
@@ -1504,17 +1505,20 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             const isNonPlanifie = course.statut_planification === 'non_planifie';
                             const isRemplacee = course.statut_realisation === 'remplace';
                             const isBrouillon = course.is_brouillon;
+                            const isTerminee = course.statut_realisation === 'termine';
+                            const isEnRetard = course.statut === 'en_retard';
+                            const isEnCours = !isTerminee && !isRemplacee && (isEnRetard || course.statut === 'en_cours' || course.statut_realisation === 'en_cours');
                             const bgColor = isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706');
                             return (
                               <div
                                 key={course.id}
                                 data-course-id={course.id}
                                 onClick={(e) => { e.stopPropagation(); onCourseClick(course); }}
-                                className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
+                                className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''} ${isTerminee ? 'opacity-80 ring-2 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-2 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
                                 style={{ left: pos.left, width: pos.width, minWidth: '80px', backgroundColor: bgColor }}
                               >
                                 <span className={`truncate flex-1 ${isRemplacee ? 'line-through' : ''}`}>
-                                  {isBrouillon ? '✎' : isRemplacee ? '⟳' : '▶'} {course.depart} → {course.arrivee} · {time}
+                                  {isBrouillon ? '✎' : isRemplacee ? '⟳' : isTerminee ? '✓' : isEnCours ? '●' : '▶'} {course.depart} → {course.arrivee} · {time}
                                 </span>
                                 <span className="bg-white/20 px-1 rounded text-[9px] flex-shrink-0">{course.duree_minutes}m</span>
                                 {isBrouillon && (
@@ -1522,6 +1526,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
                                 )}
                                 {isRemplacee && (
                                   <span className="bg-white/30 px-1 rounded text-[9px] flex-shrink-0">Rempl.</span>
+                                )}
+                                {isTerminee && (
+                                  <span className="bg-white/90 text-emerald-700 px-1 rounded text-[9px] font-semibold flex-shrink-0">✓ Fait</span>
+                                )}
+                                {isEnCours && (
+                                  <span className={`bg-white/90 px-1 rounded text-[9px] font-semibold flex-shrink-0 ${isEnRetard ? 'text-red-700' : 'text-emerald-700'}`}>{isEnRetard ? '● Retard' : '● En cours'}</span>
                                 )}
                                 {!isRemplacee && course.periode && (
                                   <span className="bg-white/20 px-1 rounded text-[9px] flex-shrink-0">{periodeLabels[course.periode] || ''}</span>
@@ -1728,9 +1738,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           const isNonPlanifie = c.statut_planification === 'non_planifie';
                           const isRemplacee = c.statut_realisation === 'remplace';
                           const isBrouillon = c.is_brouillon;
+                          const isTerminee = c.statut_realisation === 'termine';
+                          const isEnCours = !isTerminee && !isRemplacee && (c.statut === 'en_cours' || c.statut === 'en_retard' || c.statut_realisation === 'en_cours');
                           return (
-                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
+                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${isTerminee ? 'opacity-80 ring-1 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-1 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
+                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : isTerminee ? '✓ ' : isEnCours ? '● ' : ''}{fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
                             </div>
                           );
                         })}
@@ -1806,9 +1818,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     <p className={`text-xs font-medium mb-0.5 ${isSameDay(d, new Date()) ? 'text-amber-600' : 'text-gray-700'}`}>{d.getDate()}</p>
                     {dayCourses.slice(0, 3).map(c => {
                       const ligne = c.ligne_id ? lignes.find(l => l.id === c.ligne_id) : null;
+                      const isTerminee = c.statut_realisation === 'termine';
+                      const isEnCours = !isTerminee && c.statut_realisation !== 'remplace' && (c.statut === 'en_cours' || c.statut === 'en_retard' || c.statut_realisation === 'en_cours');
                       return (
-                        <div key={c.id} className="text-[8px] px-1 py-0.5 rounded mb-0.5 text-white truncate" style={{ backgroundColor: c.statut_planification === 'non_planifie' ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                          {fmtHM(c.date_heure)}
+                        <div key={c.id} className={`text-[8px] px-1 py-0.5 rounded mb-0.5 text-white truncate ${isTerminee ? 'opacity-80 ring-1 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-1 ring-emerald-400 ring-inset' : ''}`} style={{ backgroundColor: c.statut_planification === 'non_planifie' ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
+                          {isTerminee ? '✓ ' : isEnCours ? '● ' : ''}{fmtHM(c.date_heure)}
                         </div>
                       );
                     })}
