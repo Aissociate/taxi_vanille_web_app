@@ -192,6 +192,33 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }, []);
   useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); }, [currentDate, view]);
 
+  // Rafraichissement temps reel : tous les directeurs voient l'etat des courses
+  // a jour (statut_realisation mis a jour par les chauffeurs) sans recharger la
+  // page. On garde une ref vers le rechargement pour ne PAS re-souscrire a chaque
+  // navigation de date/vue, et on debounce pour absorber les rafales.
+  const reloadAllRef = useRef<() => void>(() => {});
+  reloadAllRef.current = () => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); };
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => reloadAllRef.current(), 600);
+    };
+    // Filet de securite si un evenement realtime est manque (reseau instable).
+    const poll = setInterval(() => reloadAllRef.current(), 180000);
+    const channel = supabase
+      .channel('web_planning')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'astreintes' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'coordinateur_creneaux' }, scheduleRefresh)
+      .subscribe();
+    return () => {
+      clearInterval(poll);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   async function loadRefs() {
     const [ch, li, cl, ar] = await Promise.all([
       supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id, is_coordinateur, statut').order('code, nom'),
