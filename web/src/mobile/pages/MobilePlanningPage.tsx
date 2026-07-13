@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
-import { LogOut, Clock, AlertTriangle, Calendar, ChevronDown, ChevronUp, RefreshCw, X } from 'lucide-react';
+import { LogOut, Clock, AlertTriangle, Calendar, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth, refreshSessionExpiry } from '../lib/store';
 import { enqueue, isOnline, cacheData, getCachedData } from '../lib/offlineQueue';
@@ -56,9 +56,9 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
   const [hasAstreinte, setHasAstreinte] = useState(false);
   const [plannedAstreinteId, setPlannedAstreinteId] = useState<string | null>(null);
   const [astreinteSession, setAstreinteSession] = useState<AstreinteSession | null>(null);
-  const [astreinteElapsed, setAstreinteElapsed] = useState('00:00:00');
-  const astreinteGpsRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Ping GPS unique au moment de la confirmation de l'astreinte (plus de suivi
+  // continu : l'astreinte est un simple bouton "realisee", sans start/stop).
   const sendAstreinteGpsPing = (sessionId: string) => {
     if (!chauffeur) return;
     navigator.geolocation.getCurrentPosition(
@@ -79,19 +79,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       () => {},
       { enableHighAccuracy: true, timeout: 10000 }
     );
-  };
-
-  const startAstreinteGps = (sessionId: string) => {
-    if (astreinteGpsRef.current) return;
-    sendAstreinteGpsPing(sessionId);
-    astreinteGpsRef.current = setInterval(() => sendAstreinteGpsPing(sessionId), 60000);
-  };
-
-  const stopAstreinteGps = () => {
-    if (astreinteGpsRef.current) {
-      clearInterval(astreinteGpsRef.current);
-      astreinteGpsRef.current = null;
-    }
   };
 
   useEffect(() => {
@@ -123,7 +110,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       clearInterval(poll);
       if (refreshTimer) clearTimeout(refreshTimer);
       supabase.removeChannel(channel);
-      stopAstreinteGps();
     };
   }, [chauffeur]);
 
@@ -135,19 +121,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       pendingScrollRef.current = null;
     }
   });
-
-  useEffect(() => {
-    if (!astreinteSession || astreinteSession.heure_fin) { stopAstreinteGps(); return; }
-    startAstreinteGps(astreinteSession.id);
-    const interval = setInterval(() => {
-      const diff = Date.now() - new Date(astreinteSession.heure_debut).getTime();
-      const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
-      const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
-      const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-      setAstreinteElapsed(`${h}:${m}:${s}`);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [astreinteSession]);
 
   const fetchCourses = async (background = false) => {
     if (!chauffeur) return;
@@ -252,35 +225,29 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
     setLoading(false);
   };
 
-  const handleStartAstreinte = async () => {
+  // Confirmation de l'astreinte en UNE action : plus de start/stop. On horodate
+  // heure_debut ET heure_fin a l'instant du clic -> l'astreinte est "realisee".
+  // Un ping GPS unique enregistre la position au moment de la confirmation.
+  const handleConfirmAstreinte = async () => {
     if (!chauffeur) return;
     const now = new Date().toISOString();
     const todayStr = localDayStr();
     const localId = crypto.randomUUID();
-    const sessionData = { id: localId, chauffeur_id: chauffeur.id, date: todayStr, heure_debut: now, astreinte_id: plannedAstreinteId, user_id: chauffeur.user_id || chauffeur.id };
+    const sessionData = { id: localId, chauffeur_id: chauffeur.id, date: todayStr, heure_debut: now, heure_fin: now, astreinte_id: plannedAstreinteId, user_id: chauffeur.user_id || chauffeur.id };
 
     if (isOnline()) {
       const { data } = await supabase.from('astreinte_sessions').insert(sessionData).select().maybeSingle();
-      if (data) { setAstreinteSession(data as AstreinteSession); cacheData(`astreinte_${chauffeur.id}_${todayStr}`, data); return; }
+      if (data) {
+        setAstreinteSession(data as AstreinteSession);
+        cacheData(`astreinte_${chauffeur.id}_${todayStr}`, data);
+        sendAstreinteGpsPing((data as AstreinteSession).id);
+        return;
+      }
     }
-    const localSession: AstreinteSession = { id: localId, chauffeur_id: chauffeur.id, date: todayStr, heure_debut: now, heure_fin: null };
+    const localSession: AstreinteSession = { id: localId, chauffeur_id: chauffeur.id, date: todayStr, heure_debut: now, heure_fin: now };
     setAstreinteSession(localSession);
     cacheData(`astreinte_${chauffeur.id}_${todayStr}`, localSession);
     enqueue({ table: 'astreinte_sessions', type: 'insert', data: sessionData });
-  };
-
-  const handleEndAstreinte = async () => {
-    if (!astreinteSession || !chauffeur) return;
-    const now = new Date().toISOString();
-    const updatedSession = { ...astreinteSession, heure_fin: now };
-    if (isOnline()) {
-      await supabase.from('astreinte_sessions').update({ heure_fin: now }).eq('id', astreinteSession.id);
-    } else {
-      enqueue({ table: 'astreinte_sessions', type: 'update', data: { heure_fin: now }, filter: { column: 'id', value: astreinteSession.id } });
-    }
-    setAstreinteSession(updatedSession);
-    const todayStr = localDayStr();
-    cacheData(`astreinte_${chauffeur.id}_${todayStr}`, updatedSession);
   };
 
   const getStatut = (course: CourseWithDetails): string => course.execution ? course.execution.statut : course.statut;
@@ -322,7 +289,13 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
   if (hasAstreinte && !astreinteSession) {
     return (
       <div className="min-h-screen bg-white flex flex-col">
-        <div className="flex-1 flex flex-col items-center justify-center px-6">
+        {/* Barre haute : le chauffeur peut TOUJOURS sortir (pas de piege). */}
+        <div className="flex items-center justify-end px-4 pt-4">
+          <button type="button" onClick={() => { clearAuth(); onNavigate('/mobile'); }} className="flex items-center gap-1 text-gray-500">
+            <LogOut size={14} /><span className="text-xs">Deconnexion</span>
+          </button>
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center px-6 py-8">
           <div className="w-20 h-20 rounded-full bg-orange-600 flex items-center justify-center mb-6">
             <Clock size={32} className="text-white" />
           </div>
@@ -339,38 +312,18 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
           </div>
         </div>
         <div className="p-4 pb-8">
-          <button type="button" onClick={handleStartAstreinte} className="w-full bg-orange-600 text-white py-5 rounded-xl font-bold text-xl shadow-md active:bg-orange-700">
-            DEMARRER L'ASTREINTE
+          <button type="button" onClick={handleConfirmAstreinte} className="w-full bg-orange-600 text-white py-5 rounded-xl font-bold text-xl shadow-md active:bg-orange-700">
+            CONFIRMER L'ASTREINTE
           </button>
-          <p className="text-[10px] text-gray-400 text-center mt-2">L'heure de debut sera horodatee automatiquement</p>
+          <p className="text-[10px] text-gray-400 text-center mt-2">En confirmant, l'astreinte est marquee comme realisee</p>
         </div>
       </div>
     );
   }
 
-  // Astreinte ended
-  if (hasAstreinte && astreinteSession?.heure_fin) {
-    const debutTime = fmtHM(astreinteSession.heure_debut);
-    const finTime = fmtHM(astreinteSession.heure_fin);
-    const diffMs = new Date(astreinteSession.heure_fin).getTime() - new Date(astreinteSession.heure_debut).getTime();
-    const diffH = Math.floor(diffMs / 3600000);
-    const diffM = Math.floor((diffMs % 3600000) / 60000);
-    const dureeStr = diffH > 0 ? `${diffH}h${diffM.toString().padStart(2, '0')}` : `${diffM} min`;
-    return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6">
-        <div className="w-16 h-16 rounded-full bg-green-600 flex items-center justify-center">
-          <span className="text-white text-2xl font-bold">OK</span>
-        </div>
-        <h1 className="text-2xl font-bold mt-4 text-center">Astreinte terminee</h1>
-        <div className="mt-6 bg-gray-50 rounded-xl p-6 w-full max-w-[360px] shadow-sm">
-          <div className="flex justify-between pb-3 border-b border-gray-200"><span className="text-sm text-gray-500">Debut</span><span className="text-lg font-bold">{debutTime}</span></div>
-          <div className="flex justify-between py-3 border-b border-gray-200"><span className="text-sm text-gray-500">Fin</span><span className="text-lg font-bold">{finTime}</span></div>
-          <div className="flex justify-between pt-3"><span className="text-sm text-gray-500">Duree</span><span className="text-lg font-bold">{dureeStr}</span></div>
-        </div>
-        <p className="text-sm text-gray-400 mt-8">Session enregistree avec succes</p>
-      </div>
-    );
-  }
+  // NB : plus d'ecran plein "astreinte terminee" (il piegeait le chauffeur sans
+  // sortie). Une fois confirmee, on retombe sur le planning normal avec une
+  // banniere verte "realisee" -> l'utilisateur reste libre de naviguer.
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -380,14 +333,14 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
         </div>
       )}
 
-      {hasAstreinte && astreinteSession && !astreinteSession.heure_fin && (
-        <div className="bg-orange-600 text-white px-4 py-3">
+      {hasAstreinte && astreinteSession?.heure_fin && (
+        <div className="bg-green-600 text-white px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-white animate-pulse" />
-              <span className="text-sm font-bold">ASTREINTE EN COURS</span>
+              <div className="w-3 h-3 rounded-full bg-white" />
+              <span className="text-sm font-bold">ASTREINTE REALISEE</span>
             </div>
-            <span className="font-mono text-lg font-bold tracking-wider">{astreinteElapsed}</span>
+            <span className="text-sm font-semibold">Confirmee a {fmtHM(astreinteSession.heure_debut)}</span>
           </div>
         </div>
       )}
@@ -479,11 +432,6 @@ export default function MobilePlanningPage({ onNavigate }: Props) {
       </div>
 
       <div className="sticky bottom-0 left-0 right-0 p-4 bg-gray-50 border-t border-gray-200 space-y-2">
-        {hasAstreinte && astreinteSession && !astreinteSession.heure_fin && (
-          <button type="button" onClick={handleEndAstreinte} className="w-full border-2 border-orange-600 text-orange-600 bg-white py-4 rounded-xl font-bold text-center flex items-center justify-center gap-2">
-            <X size={18} /><span>TERMINER L'ASTREINTE</span>
-          </button>
-        )}
         <button type="button" onClick={() => setShowIncident(true)} className="w-full bg-red-600 text-white py-4 rounded-xl font-bold text-center flex items-center justify-center gap-2">
           <AlertTriangle size={18} /><span>SIGNALER UN INCIDENT</span>
         </button>
