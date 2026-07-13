@@ -591,6 +591,13 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         if (typeof n.dimanche === 'number') setNbDimanche(n.dimanche);
         if (typeof n.astreinte === 'number') setNbAstreinte(n.astreinte);
         if (typeof n.non_planifie === 'number') setNbNonPlanifie(n.non_planifie);
+        // Detail fige : pour une facture validee/payee on reaffiche la liste des
+        // courses telle qu'enregistree (et non recalculee), afin de toujours
+        // pouvoir consulter ce qui a ete facture meme si les courses ont change.
+        // Un brouillon garde le detail recalcule en direct (il reflete les edits).
+        if (Array.isArray(n.courses_snapshot) && (facture as { statut?: string }).statut !== 'brouillon') {
+          setCoursesDetail(n.courses_snapshot as CourseDetail[]);
+        }
       } catch { /* notes non JSON : on garde les valeurs recalculees */ }
       const f = facture as unknown as Record<string, number | undefined>;
       if (f.tarif_trajet_normal) setTarifSemaineJour(f.tarif_trajet_normal);
@@ -688,7 +695,17 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         montant_ttc: sousTotal,
         tva: 0,
         net_a_payer: netAPayer,
-        notes: JSON.stringify({ semaine_jour: nbSemaineJour, semaine_nuit: nbSemaineNuit, samedi: nbSamedi, dimanche: nbDimanche, astreinte: nbAstreinte, non_planifie: nbNonPlanifie }),
+        notes: JSON.stringify({
+          semaine_jour: nbSemaineJour, semaine_nuit: nbSemaineNuit, samedi: nbSamedi,
+          dimanche: nbDimanche, astreinte: nbAstreinte, non_planifie: nbNonPlanifie,
+          // Snapshot fige de la liste des courses facturees : permet de reconsulter
+          // le detail meme si les courses changent/disparaissent apres validation
+          // (sans ca le detail est recalcule en direct et peut se vider).
+          courses_snapshot: coursesDetail.map(c => ({
+            id: c.id, date_heure: c.date_heure, depart: c.depart, arrivee: c.arrivee,
+            duree_minutes: c.duree_minutes, lignes: c.lignes, categorie: c.categorie,
+          })),
+        }),
         user_id: user.id,
       };
 

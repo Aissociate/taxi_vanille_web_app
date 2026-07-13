@@ -165,8 +165,10 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
     const startOfDay = mMidnightISO(dayStr);
     const endOfDay = mMidnightISO(mAddDaysStr(dayStr, 1));
 
-    // A driver is busy only if one of his courses OVERLAPS the slot to replace
-    const { data: allChauffeurs } = await supabase.from('chauffeurs').select(CHAUFFEUR_PUBLIC_COLS).eq('statut', 'actif').neq('id', course.chauffeur_id).neq('id', chauffeur!.id);
+    // A driver is busy only if one of his courses OVERLAPS the slot to replace.
+    // Le coordinateur connecte est inclus : il peut cumuler son poste de
+    // coordinateur et celui de chauffeur sur la meme ligne / le meme creneau.
+    const { data: allChauffeurs } = await supabase.from('chauffeurs').select(CHAUFFEUR_PUBLIC_COLS).eq('statut', 'actif').neq('id', course.chauffeur_id);
     const { data: busyCourses } = await supabase.from('courses')
       .select('chauffeur_id, date_heure, duree_minutes')
       .gte('date_heure', startOfDay).lt('date_heure', endOfDay)
@@ -183,7 +185,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
         })
         .map((c) => c.chauffeur_id)
     );
-    setAvailableDrivers((allChauffeurs || []).filter((ch) => !busyIds.has(ch.id)) as Chauffeur[]);
+    // Le coordinateur (chauffeur.id) reste toujours selectionnable, meme s'il a
+    // deja une course sur ce creneau : il assure les deux roles simultanement.
+    setAvailableDrivers((allChauffeurs || []).filter((ch) => ch.id === chauffeur!.id || !busyIds.has(ch.id)) as Chauffeur[]);
   };
 
   const handleConfirmReplacement = async (newDriverId: string) => {
@@ -311,7 +315,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center"><span className="font-bold text-sm">{driver.code}</span></div>
                     <div>
-                      <p className="font-semibold">{driver.prenom} {driver.nom}</p>
+                      <p className="font-semibold">{driver.prenom} {driver.nom}{driver.id === chauffeur?.id && <span className="ml-1 text-[10px] font-bold text-emerald-600">(vous)</span>}</p>
                       {driver.telephone && <a href={`tel:${driver.telephone}`} className="flex items-center gap-1 mt-0.5"><Phone size={10} className="text-blue-600" /><span className="text-[10px] text-blue-600">{driver.telephone}</span></a>}
                     </div>
                   </div>
