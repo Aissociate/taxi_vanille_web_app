@@ -1,8 +1,9 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { Receipt, Plus, X, ChevronLeft, ChevronRight, Eye, Check, Trash2, List, Columns3, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
+import { Receipt, Plus, X, ChevronLeft, ChevronRight, Eye, Check, Trash2, List, Columns3, Calendar, ChevronDown, ChevronUp, Download, Printer } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { mParts, mDateStr, mMidnightISO } from '../lib/mayotte';
+import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
 
 interface LigneSupp {
   libelle: string;
@@ -351,8 +352,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const [tarifDimanche, setTarifDimanche] = useState(0);
   const [nbAstreinte, setNbAstreinte] = useState(0);
   const [tarifAstreinte, setTarifAstreinte] = useState(0);
-  const [nbHeuresAstreinte, setNbHeuresAstreinte] = useState(facture?.nb_heures_astreinte || 0);
-  const [tarifHeureAstreinte, setTarifHeureAstreinte] = useState(facture?.tarif_heure_astreinte || 0);
+  // Astreinte facturee au FORFAIT : nombre d'astreintes realisees x forfait
+  // (le mobile confirme l'astreinte en un clic, sans duree -> plus d'heures).
+  const [nbAstreintesReal, setNbAstreintesReal] = useState((facture as any)?.nb_astreintes || 0);
+  const [forfaitAstreinte, setForfaitAstreinte] = useState((facture as any)?.forfait_astreinte || 0);
   const [nbNonPlanifie, setNbNonPlanifie] = useState(0);
   const [tarifNonPlanifie, setTarifNonPlanifie] = useState(0);
   const [nbSamedisCoord, setNbSamedisCoord] = useState((facture as any)?.nb_samedis_coordinateur || 0);
@@ -453,12 +456,12 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       const fraisTarif = tarifs.find(t => t.cle === 'frais_gestion');
       const kmSeuil = tarifs.find(t => t.cle === 'seuil_km');
       const kmTarif = tarifs.find(t => t.cle === 'tarif_km_depassement');
-      const heureAstreinteTarif = tarifs.find(t => t.cle === 'tarif_heure_astreinte');
+      const forfaitAstreinteTarif = tarifs.find(t => t.cle === 'forfait_astreinte');
       if (locationTarif) setTarifLocation(locationTarif.valeur);
       if (fraisTarif) { setTarifFraisGestion(fraisTarif.valeur); setFraisGestion(fraisTarif.actif); }
       if (kmSeuil) setSeuilKm(kmSeuil.valeur);
       if (kmTarif) setTarifKmDepassement(kmTarif.valeur);
-      if (heureAstreinteTarif) setTarifHeureAstreinte(heureAstreinteTarif.valeur);
+      if (forfaitAstreinteTarif) setForfaitAstreinte(forfaitAstreinteTarif.valeur);
     }
 
     // Jours feries du mois (cle "YYYY-MM-DD") pour tarifer au bon tarif ferie.
@@ -562,21 +565,17 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     setNbNonPlanifie(nonPlanifie);
     setTarifNonPlanifie(nonPlanifie > 0 ? totalNonPlanifie / nonPlanifie : tarifJour);
 
-    // Load astreinte sessions from Android app for hours calculation
+    // Astreintes realisees : on COMPTE les sessions confirmees du mois (le
+    // modele mobile a un seul bouton "realisee", plus de duree) -> forfait.
     const { data: astreinteSessions } = await supabase
       .from('astreinte_sessions')
-      .select('heure_debut, heure_fin')
+      .select('id')
       .eq('chauffeur_id', chauffeurId)
       .gte('date', moisStart)
       .lte('date', moisEnd);
 
-    if (!facture && astreinteSessions && astreinteSessions.length > 0) {
-      const totalMinutes = astreinteSessions.reduce((sum, s) => {
-        if (!s.heure_debut || !s.heure_fin) return sum;
-        const dur = (new Date(s.heure_fin).getTime() - new Date(s.heure_debut).getTime()) / 60000;
-        return sum + Math.max(0, dur);
-      }, 0);
-      setNbHeuresAstreinte(parseFloat((totalMinutes / 60).toFixed(1)));
+    if (!facture && astreinteSessions) {
+      setNbAstreintesReal(astreinteSessions.length);
     }
 
     // Facture existante : restaurer les compteurs enregistres (JSON notes) et les
@@ -616,7 +615,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const montantSamedi = nbSamedi * tarifSamedi;
   const montantDimanche = nbDimanche * tarifDimanche;
   const montantAstreinteTrajets = nbAstreinte * tarifAstreinte;
-  const montantHeuresAstreinte = nbHeuresAstreinte * tarifHeureAstreinte;
+  const montantForfaitAstreinte = nbAstreintesReal * forfaitAstreinte;
   const montantNonPlanifie = nbNonPlanifie * tarifNonPlanifie;
   const montantCoordSamedi = nbSamedisCoord * forfaitCoordSamedi;
   const montantCoordDimanche = nbDimanchesCoord * forfaitCoordDimanche;
@@ -633,7 +632,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
 
   // On ne rembourse jamais plus que le solde d'avance restant.
   const remboursementEffectif = Math.min(remboursementAvance, soldeAvanceAvant);
-  const sousTotal = montantSemaineJour + montantSemaineNuit + montantSamedi + montantDimanche + montantAstreinteTrajets + montantHeuresAstreinte + montantNonPlanifie + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche;
+  const sousTotal = montantSemaineJour + montantSemaineNuit + montantSamedi + montantDimanche + montantAstreinteTrajets + montantForfaitAstreinte + montantNonPlanifie + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche;
   const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementEffectif;
   const netAPayer = sousTotal - totalDeductions;
 
@@ -650,6 +649,75 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
 
   function removeLigneSupp(idx: number) {
     setLignesSupp(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  // ---- Export facture (PDF via impression navigateur, Excel sans dependance) ----
+  function factureExportData() {
+    const ch = selectedChauffeur;
+    const chLabel = ch ? `${ch.code} ${ch.prenom} ${ch.nom}`.trim() : '';
+    const lines: { label: string; nb: number; tarif: number; montant: number }[] = [];
+    const push = (label: string, nb: number, tarif: number, montant: number) => { if (montant || nb) lines.push({ label, nb, tarif, montant }); };
+    push('Trajets semaine jour', nbSemaineJour, tarifSemaineJour, montantSemaineJour);
+    push('Trajets semaine nuit', nbSemaineNuit, tarifSemaineNuit, montantSemaineNuit);
+    push('Trajets samedi', nbSamedi, tarifSamedi, montantSamedi);
+    push('Trajets dimanche/ferie', nbDimanche, tarifDimanche, montantDimanche);
+    push('Trajets astreinte', nbAstreinte, tarifAstreinte, montantAstreinteTrajets);
+    push('Astreintes realisees (forfait)', nbAstreintesReal, forfaitAstreinte, montantForfaitAstreinte);
+    push('Trajets non planifies', nbNonPlanifie, tarifNonPlanifie, montantNonPlanifie);
+    push('Coordinateur (jours de semaine)', nbJoursCoordSemaine, forfaitCoordSemaine, montantCoordSemaine);
+    push('Coordinateur (samedis)', nbSamedisCoord, forfaitCoordSamedi, montantCoordSamedi);
+    push('Coordinateur (dimanches)', nbDimanchesCoord, forfaitCoordDimanche, montantCoordDimanche);
+    lignesSupp.forEach(l => push(l.libelle || 'Ligne supplementaire', l.quantite, l.montant, l.quantite * l.montant));
+    const deductions: { label: string; montant: number }[] = [];
+    const pushD = (label: string, montant: number) => { if (montant) deductions.push({ label, montant }); };
+    pushD('Location vehicule', montantLocation);
+    pushD('Frais de gestion', montantFraisGestion);
+    pushD('Depassement kilometrique', montantDepassementKm);
+    pushD('Remboursement avance', remboursementEffectif);
+    return { numero: facture?.numero || 'BROUILLON', chLabel, code: ch?.code || 'facture', mois: moisReference, lines, deductions, sousTotal, totalDeductions, netAPayer };
+  }
+
+  function exportFactureExcel() {
+    const d = factureExportData();
+    const rows: CellValue[][] = [
+      [`Facture retrocession ${d.numero} - ${d.chLabel} - ${d.mois}`],
+      [],
+      ['Prestation', 'Quantite', 'Tarif (EUR)', 'Montant (EUR)'],
+      ...d.lines.map(l => [l.label, l.nb, l.tarif, Math.round(l.montant * 100) / 100] as CellValue[]),
+      ['Sous-total', '', '', Math.round(d.sousTotal * 100) / 100],
+      ...d.deductions.map(l => [`Deduction : ${l.label}`, '', '', -Math.round(l.montant * 100) / 100] as CellValue[]),
+      ['Total deductions', '', '', -Math.round(d.totalDeductions * 100) / 100],
+      ['NET A PAYER', '', '', Math.round(d.netAPayer * 100) / 100],
+    ];
+    downloadSpreadsheet(`Facture_${d.code}_${d.mois}`, [{ name: 'Facture', rows }]);
+  }
+
+  function exportFacturePdf() {
+    const d = factureExportData();
+    const esc = (s: string | number) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
+    const money = (n: number) => n.toFixed(2);
+    const lineRows = d.lines.map(l => `<tr><td>${esc(l.label)}</td><td class="c">${l.nb}</td><td class="r">${money(l.tarif)}</td><td class="r">${money(l.montant)}</td></tr>`).join('');
+    const dedRows = d.deductions.map(l => `<tr><td>${esc(l.label)}</td><td></td><td></td><td class="r">-${money(l.montant)}</td></tr>`).join('');
+    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Facture ${esc(d.numero)}</title>
+<style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:28px;max-width:820px;margin:auto}h1{font-size:20px;margin:0 0 4px}.meta{font-size:13px;color:#333;line-height:1.6}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border:1px solid #ddd;padding:7px 9px;font-size:13px}th{background:#f3f4f6;text-align:left}.r{text-align:right}.c{text-align:center}.tot td{font-weight:bold}.net td{background:#065f46;color:#fff;font-size:15px}.foot{margin-top:22px;font-size:11px;color:#666}@media print{body{padding:0}}</style>
+</head><body>
+<h1>Facture de retrocession</h1>
+<div class="meta"><b>Numero :</b> ${esc(d.numero)}<br><b>Chauffeur :</b> ${esc(d.chLabel)}<br><b>Mois :</b> ${esc(d.mois)}</div>
+<table><thead><tr><th>Prestation</th><th class="c">Qte</th><th class="r">Tarif</th><th class="r">Montant (EUR)</th></tr></thead>
+<tbody>${lineRows}
+<tr class="tot"><td colspan="3">Sous-total</td><td class="r">${money(d.sousTotal)}</td></tr>
+${dedRows}
+<tr class="tot"><td colspan="3">Total deductions</td><td class="r">-${money(d.totalDeductions)}</td></tr>
+<tr class="tot net"><td colspan="3">NET A PAYER</td><td class="r">${money(d.netAPayer)}</td></tr>
+</tbody></table>
+<p class="foot">Document genere le ${new Date().toLocaleDateString('fr-FR')} — Taxi Vanille.</p>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { alert("Impossible d'ouvrir la fenetre d'impression (popup bloquee par le navigateur)."); return; }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 350);
   }
 
   async function handleSave(statut: string) {
@@ -670,8 +738,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         tarif_trajet_normal: tarifSemaineJour,
         nb_trajets_astreinte: nbAstreinte + nbNonPlanifie,
         tarif_trajet_astreinte: tarifAstreinte,
-        nb_heures_astreinte: nbHeuresAstreinte,
-        tarif_heure_astreinte: tarifHeureAstreinte,
+        nb_astreintes: nbAstreintesReal,
+        forfait_astreinte: forfaitAstreinte,
+        nb_heures_astreinte: 0,
+        tarif_heure_astreinte: 0,
         forfait_coordinateur_samedi: forfaitCoordSamedi,
         forfait_coordinateur_dimanche: forfaitCoordDimanche,
         nb_samedis_coordinateur: nbSamedisCoord,
@@ -819,12 +889,12 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
                   <span className="text-right font-bold text-gray-900">{montantAstreinteTrajets.toFixed(2)} EUR</span>
                 </div>
 
-                {/* Heures astreinte */}
+                {/* Astreintes realisees (forfait) */}
                 <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
-                  <span className="text-gray-700 font-medium">Heures astreinte</span>
-                  <input type="number" step="0.5" value={nbHeuresAstreinte} onChange={(e) => setNbHeuresAstreinte(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifHeureAstreinte} onChange={(e) => setTarifHeureAstreinte(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantHeuresAstreinte.toFixed(2)} EUR</span>
+                  <span className="text-gray-700 font-medium">Astreintes realisees <span className="text-[10px] text-gray-400">(forfait)</span></span>
+                  <input type="number" value={nbAstreintesReal} onChange={(e) => setNbAstreintesReal(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
+                  <input type="number" step="0.01" value={forfaitAstreinte} onChange={(e) => setForfaitAstreinte(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
+                  <span className="text-right font-bold text-gray-900">{montantForfaitAstreinte.toFixed(2)} EUR</span>
                 </div>
 
                 {/* Non planifie */}
@@ -1054,9 +1124,17 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
 
               {/* Actions */}
               <div className="flex items-center justify-between pt-2">
-                <button onClick={onClose} className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors">
-                  Annuler
-                </button>
+                <div className="flex gap-2">
+                  <button onClick={onClose} className="px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors">
+                    Annuler
+                  </button>
+                  <button onClick={exportFacturePdf} disabled={!chauffeurId} title="Ouvrir une version imprimable (Enregistrer en PDF)" className="px-3 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 flex items-center gap-2">
+                    <Printer className="w-4 h-4" /> PDF
+                  </button>
+                  <button onClick={exportFactureExcel} disabled={!chauffeurId} title="Telecharger la facture au format Excel" className="px-3 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 flex items-center gap-2">
+                    <Download className="w-4 h-4" /> Excel
+                  </button>
+                </div>
                 <div className="flex gap-3">
                   <button onClick={() => handleSave('brouillon')} disabled={saving} className="px-5 py-2.5 border border-amber-300 text-amber-700 bg-amber-50 rounded-xl font-medium hover:bg-amber-100 transition-colors disabled:opacity-50 flex items-center gap-2">
                     Brouillon
