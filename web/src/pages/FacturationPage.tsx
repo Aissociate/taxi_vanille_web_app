@@ -345,11 +345,14 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const [nbSemaineJour, setNbSemaineJour] = useState(0);
   const [tarifSemaineJour, setTarifSemaineJour] = useState(0);
   const [nbSemaineNuit, setNbSemaineNuit] = useState(0);
-  const [tarifSemaineNuit, setTarifSemaineNuit] = useState(0);
+  // tarif* semaine-nuit/samedi/dimanche/non-planifie : plus lus a l'affichage
+  // (le detail par tranche calcule les tarifs reels) mais encore ecrits pour les
+  // colonnes agregees stockees -> on garde le setter, pas la valeur.
+  const [, setTarifSemaineNuit] = useState(0);
   const [nbSamedi, setNbSamedi] = useState(0);
-  const [tarifSamedi, setTarifSamedi] = useState(0);
+  const [, setTarifSamedi] = useState(0);
   const [nbDimanche, setNbDimanche] = useState(0);
-  const [tarifDimanche, setTarifDimanche] = useState(0);
+  const [, setTarifDimanche] = useState(0);
   const [nbAstreinte, setNbAstreinte] = useState(0);
   const [tarifAstreinte, setTarifAstreinte] = useState(0);
   // Astreinte facturee au FORFAIT : nombre d'astreintes realisees x forfait
@@ -357,7 +360,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const [nbAstreintesReal, setNbAstreintesReal] = useState((facture as any)?.nb_astreintes || 0);
   const [forfaitAstreinte, setForfaitAstreinte] = useState((facture as any)?.forfait_astreinte || 0);
   const [nbNonPlanifie, setNbNonPlanifie] = useState(0);
-  const [tarifNonPlanifie, setTarifNonPlanifie] = useState(0);
+  const [, setTarifNonPlanifie] = useState(0);
   const [nbSamedisCoord, setNbSamedisCoord] = useState((facture as any)?.nb_samedis_coordinateur || 0);
   const [forfaitCoordSamedi, setForfaitCoordSamedi] = useState((facture as any)?.forfait_coordinateur_samedi || 200);
   const [nbDimanchesCoord, setNbDimanchesCoord] = useState((facture as any)?.nb_dimanches_coordinateur || 0);
@@ -365,8 +368,9 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   // #5 : forfait coordinateur en jour de semaine (lun-ven), meme logique que sam/dim.
   const [nbJoursCoordSemaine, setNbJoursCoordSemaine] = useState((facture as any)?.nb_jours_coordinateur_semaine || 0);
   const [forfaitCoordSemaine, setForfaitCoordSemaine] = useState((facture as any)?.forfait_coordinateur_semaine || 150);
-  // #6 : ventilation du nombre de trajets par plage tarifaire.
-  const [plagesBreakdown, setPlagesBreakdown] = useState<{ label: string; count: number; total: number }[]>([]);
+  // Detail des trajets par (ligne de transport x tranche horaire) : granularite
+  // maximale, chaque tranche facturee separement au tarif reel de la plage.
+  const [plagesBreakdown, setPlagesBreakdown] = useState<{ key: string; ligneCode: string; ligneNom: string; typeJour: string; tranche: string; libelle: string; count: number; tarif: number; total: number; nonPlanifie: number }[]>([]);
 
   const [locationVehicule, setLocationVehicule] = useState(facture?.location_vehicule || false);
   const [tarifLocation, setTarifLocation] = useState(facture?.tarif_location || 0);
@@ -403,7 +407,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     const debutInstant = mMidnightISO(moisStart);
     const finInstant = mMidnightISO(`${nextY}-${String(nextM).padStart(2, '0')}-01`);
 
-    const [coursesRes, kmRes, plagesRes, avancesRes, kmAndroidRes, feriesRes] = await Promise.all([
+    const [coursesRes, kmRes, plagesRes, avancesRes, kmAndroidRes, feriesRes, lignesRes] = await Promise.all([
       supabase.from('courses')
         .select('id, date_heure, periode, statut_planification, statut_realisation, duree_minutes, depart, arrivee, ligne_id, montant, is_astreinte, lignes(nom)')
         .eq('chauffeur_id', chauffeurId)
@@ -430,7 +434,12 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         .select('date')
         .gte('date', moisStart)
         .lte('date', moisEnd),
+      supabase.from('lignes').select('id, code, nom'),
     ]);
+    // id -> {code, nom} pour libeller le detail par ligne de transport.
+    const ligneMap = new Map<string, { code: string; nom: string }>(
+      ((lignesRes.data as { id: string; code: string; nom: string }[] | null) || []).map(l => [l.id, { code: l.code, nom: l.nom }]),
+    );
 
     // Valeurs par defaut : uniquement pour une NOUVELLE facture. Pour une facture
     // existante on conserve ce qui a ete saisi/enregistre (deja charge via facture?.*).
@@ -526,31 +535,43 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     // `tarif_course` (type de jour Mayotte + heure ; plage specifique a la ligne
     // prioritaire, sinon `ordre` le plus petit) -> le decompte reconcilie avec
     // le montant facture.
-    type PlageRow = { id: string; type_jour: string; heure_debut: string; heure_fin: string; libelle: string | null; ligne_id: string | null; ordre: number };
+    type PlageRow = { id: string; type_jour: string; heure_debut: string; heure_fin: string; tarif: number; libelle: string | null; ligne_id: string | null; ordre: number };
     const plagesTyped = plages as unknown as PlageRow[];
-    const tally = new Map<string, { label: string; count: number; total: number }>();
+    type Brk = { key: string; ligneCode: string; ligneNom: string; typeJour: string; tranche: string; libelle: string; count: number; tarif: number; total: number; nonPlanifie: number };
+    const tally = new Map<string, Brk>();
     courses.forEach(c => {
       const p = mParts(c.date_heure);
       const isFerie = feries.has(mDateStr(c.date_heure));
       const montant = (c as { montant?: number }).montant || 0;
+      const ligneId = (c as { ligne_id?: string | null }).ligne_id || null;
+      const isNonPlan = c.statut_planification === 'non_planifie';
       const typeJour = (c as { is_astreinte?: boolean }).is_astreinte ? 'astreinte'
         : isFerie ? 'feries' : p.dow === 0 ? 'dimanche' : p.dow === 6 ? 'samedi' : 'lun_ven';
       const hhmm = `${String(p.h).padStart(2, '0')}:${String(p.mi).padStart(2, '0')}`;
+      // Meme selection de plage que le trigger tarif_course (plage specifique a la
+      // ligne prioritaire, sinon generique ; ordre le plus petit).
       const match = plagesTyped
         .filter(pl => pl.type_jour === typeJour && hhmm >= pl.heure_debut && hhmm < pl.heure_fin
-          && (pl.ligne_id === c.ligne_id || pl.ligne_id == null))
+          && (pl.ligne_id === ligneId || pl.ligne_id == null))
         .sort((a, b) =>
-          (Number(b.ligne_id === c.ligne_id) - Number(a.ligne_id === c.ligne_id)) || (a.ordre - b.ordre))[0];
-      const key = match ? match.id : `none:${typeJour}`;
-      const label = match
-        ? `${typeJour} ${match.heure_debut}-${match.heure_fin}${match.libelle ? ' · ' + match.libelle : ''}`
-        : `${typeJour} (hors plage)`;
-      const cur = tally.get(key) || { label, count: 0, total: 0 };
+          (Number(b.ligne_id === ligneId) - Number(a.ligne_id === ligneId)) || (a.ordre - b.ordre))[0];
+      const lig = ligneId ? ligneMap.get(ligneId) : null;
+      const ligneCode = lig?.code || (ligneId ? '?' : 'Sans ligne');
+      const tranche = match ? `${match.heure_debut}-${match.heure_fin}` : '(hors plage)';
+      // Cle par LIGNE de transport ET tranche -> detail maximal.
+      const key = `${ligneId || '∅'}::${match ? match.id : 'none:' + typeJour}`;
+      const cur: Brk = tally.get(key) || {
+        key, ligneCode, ligneNom: lig?.nom || '', typeJour, tranche,
+        libelle: match?.libelle || '', count: 0, tarif: Number(match?.tarif ?? 0), total: 0, nonPlanifie: 0,
+      };
       cur.count += 1;
       cur.total += montant;
+      if (isNonPlan) cur.nonPlanifie += 1;
       tally.set(key, cur);
     });
-    setPlagesBreakdown([...tally.values()].sort((a, b) => a.label.localeCompare(b.label)));
+    // Tri : par code ligne, puis par heure de debut de tranche.
+    setPlagesBreakdown([...tally.values()].sort((a, b) =>
+      a.ligneCode.localeCompare(b.ligneCode) || a.tranche.localeCompare(b.tranche)));
 
     setNbSemaineJour(semaineJour);
     setTarifSemaineJour(semaineJour > 0 ? totalSemaineJour / semaineJour : tarifJour);
@@ -597,6 +618,11 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         if (Array.isArray(n.courses_snapshot) && (facture as { statut?: string }).statut !== 'brouillon') {
           setCoursesDetail(n.courses_snapshot as CourseDetail[]);
         }
+        // Detail des tranches fige (facture validee/payee) : on reaffiche ce qui a
+        // ete facture, pas un recalcul (les tarifs/plages ont pu changer depuis).
+        if (Array.isArray(n.tranche_breakdown) && (facture as { statut?: string }).statut !== 'brouillon') {
+          setPlagesBreakdown(n.tranche_breakdown);
+        }
       } catch { /* notes non JSON : on garde les valeurs recalculees */ }
       const f = facture as unknown as Record<string, number | undefined>;
       if (f.tarif_trajet_normal) setTarifSemaineJour(f.tarif_trajet_normal);
@@ -610,13 +636,11 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   }
 
   // Calculations
-  const montantSemaineJour = nbSemaineJour * tarifSemaineJour;
-  const montantSemaineNuit = nbSemaineNuit * tarifSemaineNuit;
-  const montantSamedi = nbSamedi * tarifSamedi;
-  const montantDimanche = nbDimanche * tarifDimanche;
-  const montantAstreinteTrajets = nbAstreinte * tarifAstreinte;
+  // Total des trajets = somme des tranches (ligne x plage), montants reels
+  // (prix trigger tarif_course). Remplace les anciens 6 paquets moyennes.
+  const montantTrajets = plagesBreakdown.reduce((s, b) => s + b.total, 0);
+  const nbTrajetsVentiles = plagesBreakdown.reduce((s, b) => s + b.count, 0);
   const montantForfaitAstreinte = nbAstreintesReal * forfaitAstreinte;
-  const montantNonPlanifie = nbNonPlanifie * tarifNonPlanifie;
   const montantCoordSamedi = nbSamedisCoord * forfaitCoordSamedi;
   const montantCoordDimanche = nbDimanchesCoord * forfaitCoordDimanche;
   const montantCoordSemaine = nbJoursCoordSemaine * forfaitCoordSemaine;
@@ -632,12 +656,12 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
 
   // On ne rembourse jamais plus que le solde d'avance restant.
   const remboursementEffectif = Math.min(remboursementAvance, soldeAvanceAvant);
-  const sousTotal = montantSemaineJour + montantSemaineNuit + montantSamedi + montantDimanche + montantAstreinteTrajets + montantForfaitAstreinte + montantNonPlanifie + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche;
+  const sousTotal = montantTrajets + montantForfaitAstreinte + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche;
   const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementEffectif;
   const netAPayer = sousTotal - totalDeductions;
 
   const selectedChauffeur = chauffeurs.find(c => c.id === chauffeurId);
-  const totalTrajets = nbSemaineJour + nbSemaineNuit + nbSamedi + nbDimanche + nbAstreinte + nbNonPlanifie;
+  const totalTrajets = nbTrajetsVentiles;
 
   function addLigneSupp() {
     setLignesSupp([...lignesSupp, { libelle: '', quantite: 1, montant: 0 }]);
@@ -657,13 +681,11 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     const chLabel = ch ? `${ch.code} ${ch.prenom} ${ch.nom}`.trim() : '';
     const lines: { label: string; nb: number; tarif: number; montant: number }[] = [];
     const push = (label: string, nb: number, tarif: number, montant: number) => { if (montant || nb) lines.push({ label, nb, tarif, montant }); };
-    push('Trajets semaine jour', nbSemaineJour, tarifSemaineJour, montantSemaineJour);
-    push('Trajets semaine nuit', nbSemaineNuit, tarifSemaineNuit, montantSemaineNuit);
-    push('Trajets samedi', nbSamedi, tarifSamedi, montantSamedi);
-    push('Trajets dimanche/ferie', nbDimanche, tarifDimanche, montantDimanche);
-    push('Trajets astreinte', nbAstreinte, tarifAstreinte, montantAstreinteTrajets);
+    // Detail par ligne x tranche horaire (granularite maximale).
+    plagesBreakdown.forEach(b => push(
+      `${b.ligneCode} ${b.tranche}${b.libelle ? ' ' + b.libelle : ''} (${DAYTYPE_LABEL[b.typeJour] || b.typeJour})`,
+      b.count, b.tarif, b.total));
     push('Astreintes realisees (forfait)', nbAstreintesReal, forfaitAstreinte, montantForfaitAstreinte);
-    push('Trajets non planifies', nbNonPlanifie, tarifNonPlanifie, montantNonPlanifie);
     push('Coordinateur (jours de semaine)', nbJoursCoordSemaine, forfaitCoordSemaine, montantCoordSemaine);
     push('Coordinateur (samedis)', nbSamedisCoord, forfaitCoordSamedi, montantCoordSamedi);
     push('Coordinateur (dimanches)', nbDimanchesCoord, forfaitCoordDimanche, montantCoordDimanche);
@@ -775,6 +797,8 @@ ${dedRows}
             id: c.id, date_heure: c.date_heure, depart: c.depart, arrivee: c.arrivee,
             duree_minutes: c.duree_minutes, lignes: c.lignes, categorie: c.categorie,
           })),
+          // Detail fige par (ligne x tranche horaire) : ce qui a ete facture.
+          tranche_breakdown: plagesBreakdown,
         }),
         user_id: user.id,
       };
@@ -849,77 +873,44 @@ ${dedRows}
                   <span className="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-1 rounded">{totalTrajets} trajets</span>
                 </div>
 
-                {/* Semaine jour */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
-                  <span className="text-gray-700 font-medium">Semaine jour (avant 21h)</span>
-                  <input type="number" value={nbSemaineJour} onChange={(e) => setNbSemaineJour(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifSemaineJour} onChange={(e) => setTarifSemaineJour(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantSemaineJour.toFixed(2)} EUR</span>
-                </div>
-
-                {/* Semaine nuit */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
-                  <span className="text-gray-700 font-medium">Semaine nuit (21h-5h)</span>
-                  <input type="number" value={nbSemaineNuit} onChange={(e) => setNbSemaineNuit(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifSemaineNuit} onChange={(e) => setTarifSemaineNuit(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantSemaineNuit.toFixed(2)} EUR</span>
-                </div>
-
-                {/* Samedi */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
-                  <span className="text-gray-700 font-medium">Samedi</span>
-                  <input type="number" value={nbSamedi} onChange={(e) => setNbSamedi(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifSamedi} onChange={(e) => setTarifSamedi(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantSamedi.toFixed(2)} EUR</span>
-                </div>
-
-                {/* Dimanche */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
-                  <span className="text-gray-700 font-medium">Dimanche / Ferie</span>
-                  <input type="number" value={nbDimanche} onChange={(e) => setNbDimanche(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifDimanche} onChange={(e) => setTarifDimanche(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-blue-200 rounded-lg text-center text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantDimanche.toFixed(2)} EUR</span>
-                </div>
-
-                {/* Astreinte */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm border-t border-gray-100 pt-2">
-                  <span className="text-gray-700 font-medium">Trajets astreinte</span>
-                  <input type="number" value={nbAstreinte} onChange={(e) => setNbAstreinte(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifAstreinte} onChange={(e) => setTarifAstreinte(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantAstreinteTrajets.toFixed(2)} EUR</span>
-                </div>
+                {/* Detail par LIGNE x TRANCHE horaire (calcule, tarifs reels du
+                    trigger tarif_course). Chaque tranche facturee separement. */}
+                {plagesBreakdown.length > 0 ? (
+                  <div className="border border-gray-100 rounded-lg overflow-hidden">
+                    <div className="grid grid-cols-[64px_1fr_44px_66px_88px] gap-2 px-2 py-1.5 bg-gray-50 text-[10px] uppercase font-semibold text-gray-400">
+                      <span>Ligne</span><span>Tranche horaire</span><span className="text-center">Nb</span><span className="text-right">Tarif</span><span className="text-right">Total EUR</span>
+                    </div>
+                    {plagesBreakdown.map((b) => (
+                      <div key={b.key} className="grid grid-cols-[64px_1fr_44px_66px_88px] gap-2 px-2 py-1.5 items-center text-xs border-t border-gray-50">
+                        <span className="font-semibold text-gray-800">{b.ligneCode}</span>
+                        <span className="text-gray-600">
+                          {b.tranche}{b.libelle ? ` · ${b.libelle}` : ''}
+                          <span className="text-[10px] text-gray-400"> ({DAYTYPE_LABEL[b.typeJour] || b.typeJour})</span>
+                          {b.nonPlanifie > 0 && <span className="text-[10px] text-teal-600"> · {b.nonPlanifie} non planifie(s)</span>}
+                        </span>
+                        <span className="text-center tabular-nums text-gray-700">{b.count}</span>
+                        <span className="text-right tabular-nums text-gray-500">{b.tarif.toFixed(2)}</span>
+                        <span className="text-right font-bold text-gray-900 tabular-nums">{b.total.toFixed(2)}</span>
+                      </div>
+                    ))}
+                    <div className="grid grid-cols-[64px_1fr_44px_66px_88px] gap-2 px-2 py-1.5 items-center text-xs border-t border-gray-200 bg-gray-50 font-bold">
+                      <span className="col-span-2 text-gray-700">Sous-total trajets</span>
+                      <span className="text-center tabular-nums">{nbTrajetsVentiles}</span>
+                      <span />
+                      <span className="text-right tabular-nums text-gray-900">{montantTrajets.toFixed(2)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 text-center py-3">Aucun trajet termine sur ce mois.</p>
+                )}
 
                 {/* Astreintes realisees (forfait) */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
+                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm border-t border-gray-100 pt-2">
                   <span className="text-gray-700 font-medium">Astreintes realisees <span className="text-[10px] text-gray-400">(forfait)</span></span>
                   <input type="number" value={nbAstreintesReal} onChange={(e) => setNbAstreintesReal(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
                   <input type="number" step="0.01" value={forfaitAstreinte} onChange={(e) => setForfaitAstreinte(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
                   <span className="text-right font-bold text-gray-900">{montantForfaitAstreinte.toFixed(2)} EUR</span>
                 </div>
-
-                {/* Non planifie */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm border-t border-gray-100 pt-2">
-                  <span className="text-gray-700 font-medium">Non planifie (termine)</span>
-                  <input type="number" value={nbNonPlanifie} onChange={(e) => setNbNonPlanifie(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-teal-200 rounded-lg text-center text-teal-700 bg-teal-50/50 focus:ring-1 focus:ring-teal-400 outline-none" />
-                  <input type="number" step="0.01" value={tarifNonPlanifie} onChange={(e) => setTarifNonPlanifie(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-teal-200 rounded-lg text-center text-teal-700 bg-teal-50/50 focus:ring-1 focus:ring-teal-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantNonPlanifie.toFixed(2)} EUR</span>
-                </div>
-
-                {/* #6 : ventilation par plage tarifaire (informatif, calcule) */}
-                {plagesBreakdown.length > 0 && (
-                  <div className="border-t border-gray-100 pt-2">
-                    <p className="text-[10px] text-gray-400 uppercase font-semibold mb-1.5">Ventilation par plage tarifaire</p>
-                    <div className="space-y-1">
-                      {plagesBreakdown.map((b) => (
-                        <div key={b.label} className="grid grid-cols-[1fr_70px_110px] gap-2 items-center text-xs">
-                          <span className="text-gray-600 capitalize">{b.label}</span>
-                          <span className="text-center font-medium text-gray-700 tabular-nums">{b.count} traj.</span>
-                          <span className="text-right text-gray-500 tabular-nums">{b.total.toFixed(2)} EUR</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {/* Forfait coordinateur */}
                 {selectedChauffeur && chauffeurs.find(c => c.id === chauffeurId)?.code && (
@@ -1109,7 +1100,7 @@ ${dedRows}
               {/* Totaux */}
               <div className="bg-gray-900 rounded-xl p-5 text-white space-y-3">
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Sous-total ({totalTrajets} trajets + heures + lignes supp.)</span>
+                  <span className="text-gray-400">Sous-total ({totalTrajets} trajets + forfaits + lignes supp.)</span>
                   <span className="font-medium">{sousTotal.toFixed(2)} EUR</span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -1161,6 +1152,9 @@ ${dedRows}
 }
 
 const JOURS_FR = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+const DAYTYPE_LABEL: Record<string, string> = {
+  lun_ven: 'Lun-Ven', samedi: 'Samedi', dimanche: 'Dimanche', feries: 'Ferie', astreinte: 'Astreinte',
+};
 const CAT_COLORS: Record<string, string> = {
   'Semaine jour': 'bg-blue-100 text-blue-700',
   'Semaine nuit': 'bg-slate-700 text-white',
