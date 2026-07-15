@@ -6,7 +6,6 @@ import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInpu
 
 type ViewMode = 'jour' | 'semaine' | 'mois' | 'liste';
 type PeriodeFilter = 'all' | 'matin' | 'apres_midi' | 'astreinte';
-type ListeSortField = 'heure' | 'fin' | 'chauffeur' | 'ligne' | 'trajet' | 'periode' | 'statut';
 
 interface Course {
   id: string;
@@ -15,7 +14,6 @@ interface Course {
   arrivee: string;
   statut_planification: string;
   statut_realisation: string;
-  statut?: string;
   montant: number;
   notes: string;
   chauffeur_id: string | null;
@@ -123,9 +121,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [lineFilter, setLineFilter] = useState<string>('all');
   const [chauffeurFilter, setChauffeurFilter] = useState<string>('all');
   const [periodeFilter, setPeriodeFilter] = useState<PeriodeFilter>('all');
-  // Tri de la vue "liste" : colonne + sens. Cliquer un en-tete change la colonne
-  // (ou inverse le sens si deja active). "fin" = heure de depart + duree.
-  const [listeSort, setListeSort] = useState<{ field: ListeSortField; dir: 'asc' | 'desc' }>({ field: 'heure', dir: 'asc' });
   const [showForm, setShowForm] = useState(false);
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
   const [form, setForm] = useState({
@@ -196,33 +191,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
     }
   }, []);
   useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); }, [currentDate, view]);
-
-  // Rafraichissement temps reel : tous les directeurs voient l'etat des courses
-  // a jour (statut_realisation mis a jour par les chauffeurs) sans recharger la
-  // page. On garde une ref vers le rechargement pour ne PAS re-souscrire a chaque
-  // navigation de date/vue, et on debounce pour absorber les rafales.
-  const reloadAllRef = useRef<() => void>(() => {});
-  reloadAllRef.current = () => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); };
-  useEffect(() => {
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleRefresh = () => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => reloadAllRef.current(), 600);
-    };
-    // Filet de securite si un evenement realtime est manque (reseau instable).
-    const poll = setInterval(() => reloadAllRef.current(), 180000);
-    const channel = supabase
-      .channel('web_planning')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'courses' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'astreintes' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'coordinateur_creneaux' }, scheduleRefresh)
-      .subscribe();
-    return () => {
-      clearInterval(poll);
-      if (refreshTimer) clearTimeout(refreshTimer);
-      supabase.removeChannel(channel);
-    };
-  }, []);
 
   async function loadRefs() {
     const [ch, li, cl, ar] = await Promise.all([
@@ -801,27 +769,13 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return Array.from(new Set(points));
   }, [form.ligne_id, ligneArrets, lignes]);
 
-  // Publie une SELECTION de brouillons (avant : tous les brouillons charges) :
-  //  - si des courses sont cochees (mode selection), on ne publie que celles-la ;
-  //  - sinon on publie les brouillons filtres a l'ecran (ligne + chauffeur +
-  //    periode + periode de vue), ce qui permet de publier "par ligne / chauffeur".
   async function publishDrafts() {
-    const usingSelection = selectMode && selectedCourseIds.size > 0;
-    const targets = (usingSelection
-      ? filteredCourses.filter(c => selectedCourseIds.has(c.id))
-      : filteredCourses
-    ).filter(c => c.is_brouillon);
-    const draftIds = targets.map(c => c.id);
-    if (draftIds.length === 0) { alert('Aucun brouillon a publier dans la selection.'); return; }
-    const scope: string[] = [];
-    if (usingSelection) scope.push('courses selectionnees');
-    if (lineFilter !== 'all') scope.push(`ligne ${lignes.find(l => l.id === lineFilter)?.code || ''}`);
-    if (chauffeurFilter !== 'all') scope.push(`chauffeur ${chauffeurs.find(c => c.id === chauffeurFilter)?.code || ''}`);
-    if (periodeFilter !== 'all') scope.push(periodeLabels[periodeFilter] || periodeFilter);
-    const scopeStr = scope.length ? ` (${scope.join(' · ')})` : '';
-    if (!confirm(`Publier ${draftIds.length} brouillon(s)${scopeStr} ?`)) return;
+    const { from, to } = getDateRange();
+    const draftIds = courses.filter(c => c.is_brouillon).map(c => c.id);
+    if (draftIds.length === 0) return;
+    if (!confirm(`Publier ${draftIds.length} brouillon(s) pour cette periode ?`)) return;
     await supabase.from('courses').update({ is_brouillon: false }).in('id', draftIds);
-    await logAction('publish', 'courses', null, `Publication de ${draftIds.length} brouillon(s)${scopeStr}`, null, { ids: draftIds });
+    await logAction('publish', 'courses', null, `Publication de ${draftIds.length} brouillon(s)`, null, { ids: draftIds });
     loadCourses();
   }
 
@@ -1292,12 +1246,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   const nonPlanifieCount = courses.filter(c => c.statut_planification === 'non_planifie').length;
   const brouillonCount = courses.filter(c => c.is_brouillon).length;
-  // Nombre de brouillons reellement publiables selon la selection courante
-  // (courses cochees, sinon filtres ligne/chauffeur/periode) -> compteur du bouton.
-  const publishableCount = (selectMode && selectedCourseIds.size > 0
-    ? filteredCourses.filter(c => selectedCourseIds.has(c.id))
-    : filteredCourses).filter(c => c.is_brouillon).length;
-  const publishScoped = publishableCount !== brouillonCount || (selectMode && selectedCourseIds.size > 0);
 
   const periodeLabels: Record<string, string> = {
     matin: 'AM',
@@ -1360,12 +1308,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
               <FileEdit className="w-3.5 h-3.5" /> {draftMode ? 'Mode brouillon' : 'Brouillon'}
             </button>
             {brouillonCount > 0 && (
-              <button
-                onClick={publishDrafts}
-                title={publishScoped ? `Publie ${publishableCount} brouillon(s) de la selection courante (sur ${brouillonCount})` : 'Publie tous les brouillons de la periode'}
-                className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-1.5"
-              >
-                <Send className="w-3.5 h-3.5" /> {publishScoped ? `Publier selection (${publishableCount})` : `Publier (${brouillonCount})`}
+              <button onClick={publishDrafts} className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-1.5">
+                <Send className="w-3.5 h-3.5" /> Publier ({brouillonCount})
               </button>
             )}
             <button onClick={openAstreinteForm} className="px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-900 text-white rounded-lg transition-colors flex items-center gap-1.5">
@@ -1533,20 +1477,17 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             const isNonPlanifie = course.statut_planification === 'non_planifie';
                             const isRemplacee = course.statut_realisation === 'remplace';
                             const isBrouillon = course.is_brouillon;
-                            const isTerminee = course.statut_realisation === 'termine';
-                            const isEnRetard = course.statut === 'en_retard';
-                            const isEnCours = !isTerminee && !isRemplacee && (isEnRetard || course.statut === 'en_cours' || course.statut_realisation === 'en_cours');
                             const bgColor = isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706');
                             return (
                               <div
                                 key={course.id}
                                 data-course-id={course.id}
                                 onClick={(e) => { e.stopPropagation(); onCourseClick(course); }}
-                                className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''} ${isTerminee ? 'opacity-80 ring-2 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-2 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
+                                className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
                                 style={{ left: pos.left, width: pos.width, minWidth: '80px', backgroundColor: bgColor }}
                               >
                                 <span className={`truncate flex-1 ${isRemplacee ? 'line-through' : ''}`}>
-                                  {isBrouillon ? '✎' : isRemplacee ? '⟳' : isTerminee ? '✓' : isEnCours ? '●' : '▶'} {course.depart} → {course.arrivee} · {time}
+                                  {isBrouillon ? '✎' : isRemplacee ? '⟳' : '▶'} {course.depart} → {course.arrivee} · {time}
                                 </span>
                                 <span className="bg-white/20 px-1 rounded text-[9px] flex-shrink-0">{course.duree_minutes}m</span>
                                 {isBrouillon && (
@@ -1554,12 +1495,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
                                 )}
                                 {isRemplacee && (
                                   <span className="bg-white/30 px-1 rounded text-[9px] flex-shrink-0">Rempl.</span>
-                                )}
-                                {isTerminee && (
-                                  <span className="bg-white/90 text-emerald-700 px-1 rounded text-[9px] font-semibold flex-shrink-0">✓ Fait</span>
-                                )}
-                                {isEnCours && (
-                                  <span className={`bg-white/90 px-1 rounded text-[9px] font-semibold flex-shrink-0 ${isEnRetard ? 'text-red-700' : 'text-emerald-700'}`}>{isEnRetard ? '● Retard' : '● En cours'}</span>
                                 )}
                                 {!isRemplacee && course.periode && (
                                   <span className="bg-white/20 px-1 rounded text-[9px] flex-shrink-0">{periodeLabels[course.periode] || ''}</span>
@@ -1766,11 +1701,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           const isNonPlanifie = c.statut_planification === 'non_planifie';
                           const isRemplacee = c.statut_realisation === 'remplace';
                           const isBrouillon = c.is_brouillon;
-                          const isTerminee = c.statut_realisation === 'termine';
-                          const isEnCours = !isTerminee && !isRemplacee && (c.statut === 'en_cours' || c.statut === 'en_retard' || c.statut_realisation === 'en_cours');
                           return (
-                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${isTerminee ? 'opacity-80 ring-1 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-1 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : isTerminee ? '✓ ' : isEnCours ? '● ' : ''}{fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
+                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
+                              {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : ''}{fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
                             </div>
                           );
                         })}
@@ -1846,11 +1779,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     <p className={`text-xs font-medium mb-0.5 ${isSameDay(d, new Date()) ? 'text-amber-600' : 'text-gray-700'}`}>{d.getDate()}</p>
                     {dayCourses.slice(0, 3).map(c => {
                       const ligne = c.ligne_id ? lignes.find(l => l.id === c.ligne_id) : null;
-                      const isTerminee = c.statut_realisation === 'termine';
-                      const isEnCours = !isTerminee && c.statut_realisation !== 'remplace' && (c.statut === 'en_cours' || c.statut === 'en_retard' || c.statut_realisation === 'en_cours');
                       return (
-                        <div key={c.id} className={`text-[8px] px-1 py-0.5 rounded mb-0.5 text-white truncate ${isTerminee ? 'opacity-80 ring-1 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-1 ring-emerald-400 ring-inset' : ''}`} style={{ backgroundColor: c.statut_planification === 'non_planifie' ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
-                          {isTerminee ? '✓ ' : isEnCours ? '● ' : ''}{fmtHM(c.date_heure)}
+                        <div key={c.id} className="text-[8px] px-1 py-0.5 rounded mb-0.5 text-white truncate" style={{ backgroundColor: c.statut_planification === 'non_planifie' ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
+                          {fmtHM(c.date_heure)}
                         </div>
                       );
                     })}
@@ -1865,48 +1796,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
       {/* List View */}
       {view === 'liste' && (() => {
-        const statutRank: Record<string, number> = {
-          brouillon: 0, programme: 1, en_cours: 2, en_retard: 3, termine: 4, terminee: 4, remplace: 5, annule: 6,
-        };
-        // Cle de tri par course selon la colonne active. Chaine (localeCompare) ou
-        // nombre (heure/fin/statut) selon le champ.
-        const sortVal = (c: Course): string | number => {
-          switch (listeSort.field) {
-            case 'fin': return new Date(c.date_heure).getTime() + (c.duree_minutes || 0) * 60000;
-            case 'chauffeur': {
-              const ch = chauffeurs.find(x => x.id === c.chauffeur_id);
-              return ch ? `${ch.code} ${ch.nom} ${ch.prenom}` : '￿'; // non affecte en dernier
-            }
-            case 'ligne': return c.ligne_id ? (lignes.find(x => x.id === c.ligne_id)?.code || '') : '￿';
-            case 'trajet': return `${c.depart} → ${c.arrivee}`.toLowerCase();
-            case 'periode': return c.periode || '';
-            case 'statut': return statutRank[c.is_brouillon ? 'brouillon' : (c.statut_realisation || 'programme')] ?? 99;
-            case 'heure':
-            default: return new Date(c.date_heure).getTime();
-          }
-        };
         const jour = [...filteredCourses]
           .filter(c => isSameDay(parseCourseDate(c.date_heure), currentDate))
-          .sort((a, b) => {
-            const va = sortVal(a), vb = sortVal(b);
-            let cmp = typeof va === 'number' && typeof vb === 'number'
-              ? va - vb
-              : String(va).localeCompare(String(vb));
-            if (cmp === 0) cmp = a.date_heure.localeCompare(b.date_heure); // tri secondaire stable
-            return listeSort.dir === 'asc' ? cmp : -cmp;
-          });
-        const toggleSort = (field: ListeSortField) => setListeSort(prev =>
-          prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' });
-        const SortTh = ({ field, label }: { field: ListeSortField; label: string }) => (
-          <th className="text-left px-3 py-2 font-semibold">
-            <button type="button" onClick={() => toggleSort(field)} className="inline-flex items-center gap-1 uppercase hover:text-amber-600 transition-colors">
-              {label}
-              <span className={listeSort.field === field ? 'text-amber-600' : 'text-gray-300'}>
-                {listeSort.field === field ? (listeSort.dir === 'asc' ? '↑' : '↓') : '↕'}
-              </span>
-            </button>
-          </th>
-        );
+          .sort((a, b) => a.date_heure.localeCompare(b.date_heure));
         const statutBadge = (c: Course) => {
           const s = c.is_brouillon ? 'brouillon' : (c.statut_realisation || 'programme');
           const map: Record<string, [string, string]> = {
@@ -1928,13 +1820,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200 text-[10px] uppercase text-gray-500">
                   <tr>
-                    <SortTh field="heure" label="Heure" />
-                    <SortTh field="fin" label="Fin" />
-                    <SortTh field="chauffeur" label="Chauffeur" />
-                    <SortTh field="ligne" label="Ligne" />
-                    <SortTh field="trajet" label="Trajet" />
-                    <SortTh field="periode" label="Periode" />
-                    <SortTh field="statut" label="Statut" />
+                    <th className="text-left px-3 py-2 font-semibold">Heure</th>
+                    <th className="text-left px-3 py-2 font-semibold">Chauffeur</th>
+                    <th className="text-left px-3 py-2 font-semibold">Ligne</th>
+                    <th className="text-left px-3 py-2 font-semibold">Trajet</th>
+                    <th className="text-left px-3 py-2 font-semibold">Periode</th>
+                    <th className="text-left px-3 py-2 font-semibold">Statut</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -1945,7 +1836,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     return (
                       <tr key={course.id} onClick={() => onCourseClick(course)} className={`cursor-pointer transition-colors ${selected ? 'bg-blue-50' : 'hover:bg-amber-50/40'}`}>
                         <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{fmtHM(course.date_heure)}</td>
-                        <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtHM(new Date(new Date(course.date_heure).getTime() + (course.duree_minutes || 0) * 60000).toISOString())}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{ch ? `${ch.code} ${ch.nom} ${ch.prenom}` : <span className="text-amber-600 font-medium">Non affecte</span>}</td>
                         <td className="px-3 py-2">{li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}</td>
                         <td className="px-3 py-2 text-gray-700">{course.depart} → {course.arrivee}</td>

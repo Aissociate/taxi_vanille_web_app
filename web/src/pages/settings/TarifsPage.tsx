@@ -460,33 +460,32 @@ export function TarifsPage({ user }: TarifsPageProps) {
         </div>
       </div>
 
-      {/* FORFAIT PAR ASTREINTE REALISEE */}
+      {/* TARIF HORAIRE ASTREINTE */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-5 py-4">
           <div className="flex items-center gap-2 mb-3">
             <Moon className="w-4 h-4 text-amber-600" />
-            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">Forfait par astreinte realisee</span>
+            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">Tarif horaire heure d'astreinte</span>
           </div>
 
           <p className="text-sm text-gray-600 mb-4">
-            Montant paye au chauffeur pour chaque astreinte realisee (confirmee d'un clic sur l'appli).
-            Remplace l'ancien tarif horaire : on ne compte plus les heures mais le nombre d'astreintes du mois.
+            Montant paye par heure d'astreinte effectuee par le chauffeur, en dehors des courses planifiees.
           </p>
 
           <div className="flex items-center justify-between">
             <div>
-              <h4 className="font-medium text-gray-900">Forfait par astreinte</h4>
-              <p className="text-xs text-gray-500">Multiplie par le nombre d'astreintes realisees sur le mois</p>
+              <h4 className="font-medium text-gray-900">Tarif par heure d'astreinte</h4>
+              <p className="text-xs text-gray-500">Applique au nombre d'heures d'astreinte enregistrees sur la periode</p>
             </div>
             <div className="flex items-center gap-1">
               <input
                 type="number"
                 step="0.01"
-                value={getFrais('forfait_astreinte')?.valeur ?? 50}
-                onChange={(e) => updateFraisLocal('forfait_astreinte', { valeur: parseFloat(e.target.value) || 0, periode: 'astreinte', actif: true })}
+                value={getFrais('tarif_heure_astreinte')?.valeur ?? 15}
+                onChange={(e) => updateFraisLocal('tarif_heure_astreinte', { valeur: parseFloat(e.target.value) || 0, periode: 'heure', actif: true })}
                 className="w-24 px-2 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none"
               />
-              <span className="text-xs text-gray-400">EUR / astreinte</span>
+              <span className="text-xs text-gray-400">EUR / heure</span>
             </div>
           </div>
         </div>
