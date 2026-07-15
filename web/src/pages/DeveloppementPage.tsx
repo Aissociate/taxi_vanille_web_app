@@ -17,6 +17,8 @@ interface BugRecord {
   statut: string;
   priorite: string;
   created_at: string;
+  updated_at?: string;
+  resolution_comment?: string;
 }
 
 interface BugResponse {
@@ -331,6 +333,22 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                             Charger la capture...
                           </button>
                         )}
+                      </div>
+                    )}
+
+                    {/* Resolution comment */}
+                    {bug.resolution_comment && (bug.statut === 'resolved' || bug.statut === 'closed') && (
+                      <div className="px-5 py-3 bg-emerald-50 border-b border-gray-100">
+                        <div className="flex items-center gap-2 mb-1">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          <span className="text-xs font-semibold text-emerald-700">Resolution</span>
+                          {bug.updated_at && (
+                            <span className="text-[10px] text-emerald-600/60">
+                              {new Date(bug.updated_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-emerald-900 whitespace-pre-wrap">{bug.resolution_comment}</p>
                       </div>
                     )}
 
