@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { UserCircle, Plus, Search, Trash2, X, Phone, Mail, Building, TrendingUp, MapPin, Clock, DollarSign, ArrowLeft, FileText } from 'lucide-react';
 import { ReportWizard } from '../components/ReportWizard';
+import { mDateStr, mMidnightISO, mAddDaysStr, mMondayStr, mNoon } from '../lib/mayotte';
 import type { User } from '@supabase/supabase-js';
 
 interface Client {
@@ -56,17 +57,33 @@ interface ClientsPageProps {
 
 type Period = 'jour' | 'semaine' | 'mois';
 
-function getPeriodStart(period: Period): Date {
-  const now = new Date();
+// Bornes [debut, fin[ de la periode, en heure de MAYOTTE et avec une BORNE HAUTE
+// (l'ancienne version n'avait qu'une borne basse -> "Aujourd'hui" comptait aussi
+// TOUT le futur : 4515 courses au lieu de ~329, trajets du 31 juillet inclus...).
+function getPeriodRange(period: Period): { start: number; end: number } {
+  const todayStr = mDateStr(new Date()); // 'YYYY-MM-DD' Mayotte
+  let startStr: string;
+  let endStr: string;
   if (period === 'jour') {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    startStr = todayStr;
+    endStr = mAddDaysStr(todayStr, 1);
+  } else if (period === 'semaine') {
+    startStr = mMondayStr(mNoon(todayStr)); // lundi de la semaine courante
+    endStr = mAddDaysStr(startStr, 7);
+  } else { // mois
+    startStr = `${todayStr.slice(0, 7)}-01`;
+    const [y, m] = todayStr.split('-').map(Number);
+    const ny = m === 12 ? y + 1 : y;
+    const nm = m === 12 ? 1 : m + 1;
+    endStr = `${ny}-${String(nm).padStart(2, '0')}-01`;
   }
-  if (period === 'semaine') {
-    const day = now.getDay();
-    const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-    return new Date(now.getFullYear(), now.getMonth(), diff);
-  }
-  return new Date(now.getFullYear(), now.getMonth(), 1);
+  return { start: new Date(mMidnightISO(startStr)).getTime(), end: new Date(mMidnightISO(endStr)).getTime() };
+}
+
+// Une course tombe-t-elle dans la periode (borne haute EXCLUE) ?
+function inRange(dateStr: string, r: { start: number; end: number }): boolean {
+  const t = new Date(dateStr).getTime();
+  return t >= r.start && t < r.end;
 }
 
 export function ClientsPage({ user }: ClientsPageProps) {
@@ -164,12 +181,12 @@ export function ClientsPage({ user }: ClientsPageProps) {
     `${c.nom} ${c.telephone} ${c.societe} ${c.contact1_nom} ${c.contact2_nom}`.toLowerCase().includes(search.toLowerCase())
   );
 
-  const periodStart = useMemo(() => getPeriodStart(period), [period]);
+  const periodRange = useMemo(() => getPeriodRange(period), [period]);
 
   const clientKpis = useMemo(() => {
     if (!selectedClient) return null;
     const clientCourses = courses.filter(
-      (c) => c.client_id === selectedClient.id && new Date(c.date_heure) >= periodStart
+      (c) => c.client_id === selectedClient.id && inRange(c.date_heure, periodRange)
     );
     const totalCourses = clientCourses.length;
     const totalMontant = clientCourses.reduce((s, c) => s + (c.montant || 0), 0);
@@ -177,20 +194,20 @@ export function ClientsPage({ user }: ClientsPageProps) {
     const completedCourses = clientCourses.filter(c => c.statut_realisation === 'termine' || c.statut === 'terminee').length;
     const cancelledCourses = clientCourses.filter(c => c.statut_realisation === 'annule' || c.statut === 'annulee').length;
     return { totalCourses, totalMontant, completedCourses, cancelledCourses };
-  }, [selectedClient, courses, periodStart]);
+  }, [selectedClient, courses, periodRange]);
 
   const globalKpis = useMemo(() => {
-    const periodCourses = courses.filter(c => new Date(c.date_heure) >= periodStart);
+    const periodCourses = courses.filter(c => inRange(c.date_heure, periodRange));
     const totalCourses = periodCourses.length;
     const totalMontant = periodCourses.reduce((s, c) => s + (c.montant || 0), 0);
     const uniqueClients = new Set(periodCourses.map(c => c.client_id).filter(Boolean)).size;
     return { totalCourses, totalMontant, uniqueClients };
-  }, [courses, periodStart]);
+  }, [courses, periodRange]);
 
   // DETAIL VIEW
   if (selectedClient) {
     const clientCourses = courses
-      .filter(c => c.client_id === selectedClient.id && new Date(c.date_heure) >= periodStart)
+      .filter(c => c.client_id === selectedClient.id && inRange(c.date_heure, periodRange))
       .sort((a, b) => new Date(b.date_heure).getTime() - new Date(a.date_heure).getTime());
 
     return (
@@ -447,7 +464,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
       ) : (
         <div className="grid gap-3">
           {filtered.map((c) => {
-            const cCourses = courses.filter(co => co.client_id === c.id && new Date(co.date_heure) >= periodStart);
+            const cCourses = courses.filter(co => co.client_id === c.id && inRange(co.date_heure, periodRange));
             const cTotal = cCourses.reduce((s, co) => s + (co.montant || 0), 0);
             return (
               <div
