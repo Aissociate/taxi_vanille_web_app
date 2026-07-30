@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare, ArrowLeftRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare, ArrowLeftRight, Undo2 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInputToISO, mMondayStr, mNoon, mAddDaysStr, MAYOTTE_OFFSET, fmtHM, fmtMonthYear } from '../lib/mayotte';
 
@@ -841,6 +841,42 @@ export function PlanningPage({ user }: PlanningPageProps) {
     if (creneauIds.length) loadCoordCreneaux();
   }
 
+  // Operation INVERSE de publishDrafts : repasse en brouillon ce qui est publie
+  // dans le perimetre affiche (courses cochees, sinon filtres ligne/chauffeur).
+  // Une course deja demarree ou terminee n'est jamais depubliee : le chauffeur
+  // l'a commencee, la masquer ferait disparaitre son travail.
+  async function unpublishSelection() {
+    const usingSelection = selectMode && selectedCourseIds.size > 0;
+    const targets = (usingSelection
+      ? filteredCourses.filter(c => selectedCourseIds.has(c.id))
+      : filteredCourses
+    ).filter(c => !c.is_brouillon && !['en_cours', 'termine', 'terminee'].includes(c.statut_realisation || ''));
+    const courseIds = targets.map(c => c.id);
+    const astreinteIds = usingSelection ? [] : unpublishableAstreintes.map(a => a.id);
+    const creneauIds = usingSelection ? [] : unpublishableCreneaux.map(cc => cc.id);
+    const total = courseIds.length + astreinteIds.length + creneauIds.length;
+    if (total === 0) { alert('Rien a repasser en brouillon dans la selection (les courses demarrees ou terminees sont exclues).'); return; }
+    const scope: string[] = [];
+    if (usingSelection) scope.push('courses selectionnees');
+    if (lineFilter !== 'all') scope.push(`ligne ${lignes.find(l => l.id === lineFilter)?.code || ''}`);
+    if (chauffeurFilter !== 'all') scope.push(`chauffeur ${chauffeurs.find(c => c.id === chauffeurFilter)?.code || ''}`);
+    if (periodeFilter !== 'all') scope.push(periodeLabels[periodeFilter] || periodeFilter);
+    const scopeStr = scope.length ? ` (${scope.join(' · ')})` : '';
+    const detail: string[] = [];
+    if (courseIds.length) detail.push(`${courseIds.length} course(s)`);
+    if (astreinteIds.length) detail.push(`${astreinteIds.length} astreinte(s)`);
+    if (creneauIds.length) detail.push(`${creneauIds.length} creneau(x) coordinateur`);
+    const detailStr = detail.join(', ');
+    if (!confirm(`Repasser ${detailStr}${scopeStr} en brouillon ?\nCes elements ne seront plus visibles par les chauffeurs.`)) return;
+    if (courseIds.length) await supabase.from('courses').update({ is_brouillon: true }).in('id', courseIds);
+    if (astreinteIds.length) await supabase.from('astreintes').update({ is_brouillon: true }).in('id', astreinteIds);
+    if (creneauIds.length) await supabase.from('coordinateur_creneaux').update({ is_brouillon: true }).in('id', creneauIds);
+    await logAction('unpublish', 'courses', null, `Retour en brouillon de ${detailStr}${scopeStr}`, null, { courses: courseIds, astreintes: astreinteIds, creneaux: creneauIds });
+    loadCourses();
+    if (astreinteIds.length) loadAstreintes();
+    if (creneauIds.length) loadCoordCreneaux();
+  }
+
   const [editingAstreinte, setEditingAstreinte] = useState<Astreinte | null>(null);
 
   function openAstreinteForm() {
@@ -1121,16 +1157,37 @@ export function PlanningPage({ user }: PlanningPageProps) {
     if (!editingCourse || !replaceChauffeurId) return;
     const oldChauffeur = chauffeurs.find(c => c.id === editingCourse.chauffeur_id);
     const newChauffeur = chauffeurs.find(c => c.id === replaceChauffeurId);
+    // Garde-fou : une course demarree ou terminee ne doit pas etre "remplacee"
+    // (cela effacerait sa realisation et fausserait la facturation).
+    if (['en_cours', 'termine', 'terminee'].includes(editingCourse.statut_realisation || '')) {
+      alert('Remplacement impossible : la course est deja demarree ou terminee. Creez plutot une nouvelle course pour le remplacant.');
+      return;
+    }
     // On marque l'originale remplacee de facon CONDITIONNELLE et controlee : si
     // l'update echoue (0 ligne / RLS), on n'insere PAS le remplacant (sinon deux
     // courses actives au meme horaire, les deux chauffeurs se presentent).
+    // `or(is.null, neq)` et non `neq` seul : en SQL `colonne <> 'remplace'` est
+    // NULL (donc faux) quand la colonne est NULL -> la course serait injustement
+    // consideree comme non modifiable.
     const { error: updErr, count: updCount } = await supabase
       .from('courses')
       .update({ statut_realisation: 'remplace' }, { count: 'exact' })
       .eq('id', editingCourse.id)
-      .neq('statut_realisation', 'remplace');
-    if (updErr) { alert(`Remplacement impossible : ${updErr.message}`); return; }
-    if (!updCount) { alert('Remplacement impossible : course deja remplacee, introuvable ou droits insuffisants.'); return; }
+      .or('statut_realisation.is.null,statut_realisation.neq.remplace');
+    if (updErr) {
+      console.error('[Planning] remplacement, update originale:', updErr);
+      alert(`Remplacement impossible : ${updErr.message}${updErr.code ? ` (code ${updErr.code})` : ''}`);
+      return;
+    }
+    if (!updCount) {
+      // Cas le plus frequent : la course vient d'etre remplacee ailleurs (appli
+      // coordinateur) et l'ecran affiche encore l'ancien etat -> on recharge.
+      alert("Remplacement impossible : cette course a deja ete remplacee (peut-etre depuis l'appli coordinateur). Le planning est recharge, verifiez l'etat a jour.");
+      setShowReplace(false);
+      setShowForm(false);
+      loadCourses();
+      return;
+    }
     // Duplicate course onto the new chauffeur ; on recopie is_brouillon / is_astreinte
     // (remplacer un brouillon ne doit pas publier immediatement une course).
     const { error: insErr } = await supabase.from('courses').insert({
@@ -1153,7 +1210,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
     if (insErr) {
       // On tente de revenir en arriere pour ne pas laisser une course "fantome".
       await supabase.from('courses').update({ statut_realisation: 'programme' }).eq('id', editingCourse.id);
-      alert(`Remplacement impossible (creation du remplacant) : ${insErr.message}`);
+      console.error('[Planning] remplacement, creation du remplacant:', insErr);
+      alert(`Remplacement impossible (creation du remplacant) : ${insErr.message}${insErr.code ? ` (code ${insErr.code})` : ''}`);
       return;
     }
     await logAction('replace', 'courses', editingCourse.id, `Remplacement: ${oldChauffeur ? `${oldChauffeur.prenom} ${oldChauffeur.nom}` : '?'} → ${newChauffeur ? `${newChauffeur.prenom} ${newChauffeur.nom}` : '?'} (${editingCourse.depart} → ${editingCourse.arrivee})`, editingCourse as unknown as Record<string, unknown>, { chauffeur_id: replaceChauffeurId, statut_planification: 'non_planifie' });
@@ -1260,6 +1318,25 @@ export function PlanningPage({ user }: PlanningPageProps) {
     );
   }, [coordCreneaux, lineFilter, chauffeurFilter, periodeFilter]);
 
+  // Memes regles, en sens inverse : ce qui est PUBLIE et peut redevenir brouillon.
+  const unpublishableAstreintes = useMemo(() => {
+    if (periodeFilter === 'matin' || periodeFilter === 'apres_midi') return [];
+    return astreintes.filter(a =>
+      !a.is_brouillon
+      && (lineFilter === 'all' || a.ligne_id === lineFilter)
+      && (chauffeurFilter === 'all' || a.chauffeur_id === chauffeurFilter)
+    );
+  }, [astreintes, lineFilter, chauffeurFilter, periodeFilter]);
+
+  const unpublishableCreneaux = useMemo(() => {
+    if (periodeFilter !== 'all') return [];
+    return coordCreneaux.filter(cc =>
+      !cc.is_brouillon
+      && (lineFilter === 'all' || cc.ligne_id === lineFilter)
+      && (chauffeurFilter === 'all' || cc.coordinateur_id === chauffeurFilter)
+    );
+  }, [coordCreneaux, lineFilter, chauffeurFilter, periodeFilter]);
+
   const chauffeursByLigne = useMemo(() => {
     const groups: Map<string | null, Chauffeur[]> = new Map();
     filteredChauffeurs.forEach(c => {
@@ -1342,6 +1419,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
     : filteredCourses).filter(c => c.is_brouillon).length
     + (usingCourseSelection ? 0 : publishableAstreintes.length + publishableCreneaux.length);
   const publishScoped = publishableCount !== brouillonCount || usingCourseSelection;
+  // Elements publies (donc depubliables) du perimetre courant. Les courses
+  // demarrees/terminees sont exclues : on ne masque pas un travail deja fait.
+  const unpublishableCount = (usingCourseSelection
+    ? filteredCourses.filter(c => selectedCourseIds.has(c.id))
+    : filteredCourses).filter(c => !c.is_brouillon && !['en_cours', 'termine', 'terminee'].includes(c.statut_realisation || '')).length
+    + (usingCourseSelection ? 0 : unpublishableAstreintes.length + unpublishableCreneaux.length);
 
   const periodeLabels: Record<string, string> = {
     matin: 'AM',
@@ -1410,6 +1493,15 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-1.5"
               >
                 <Send className="w-3.5 h-3.5" /> {publishScoped ? `Publier selection (${publishableCount})` : `Publier (${brouillonCount})`}
+              </button>
+            )}
+            {unpublishableCount > 0 && (
+              <button
+                onClick={unpublishSelection}
+                title={`Repasse ${unpublishableCount} element(s) publie(s) en brouillon (perimetre affiche). Les courses demarrees ou terminees sont exclues.`}
+                className="px-3 py-1.5 text-xs font-medium border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors flex items-center gap-1.5"
+              >
+                <Undo2 className="w-3.5 h-3.5" /> Depublier ({unpublishableCount})
               </button>
             )}
             <button onClick={openAstreinteForm} className="px-3 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-900 text-white rounded-lg transition-colors flex items-center gap-1.5">
@@ -2005,6 +2097,82 @@ export function PlanningPage({ user }: PlanningPageProps) {
               )}
             </div>
             <p className="text-[10px] text-gray-400 mt-2">{jour.length} course(s) · {formatDateFr(currentDate)}</p>
+
+            {/* Astreintes et creneaux coordinateur du jour : ils n'apparaissaient
+                que dans les vues Jour/Semaine/Mois, jamais en vue Liste. */}
+            {(() => {
+              const { from, to } = getDateRange();
+              const overlapsDay = (debut: string, fin: string) =>
+                new Date(debut).getTime() < new Date(to).getTime()
+                && new Date(fin).getTime() > new Date(from).getTime();
+              const astrJour = astreintes.filter(a =>
+                overlapsDay(a.date_debut, a.date_fin)
+                && (lineFilter === 'all' || a.ligne_id === lineFilter)
+                && (chauffeurFilter === 'all' || a.chauffeur_id === chauffeurFilter)
+                && (periodeFilter === 'all' || periodeFilter === 'astreinte')
+              );
+              const coordJour = coordCreneaux.filter(cc =>
+                overlapsDay(cc.date_debut, cc.date_fin)
+                && (lineFilter === 'all' || cc.ligne_id === lineFilter)
+                && (chauffeurFilter === 'all' || cc.coordinateur_id === chauffeurFilter)
+                && periodeFilter === 'all'
+              );
+              if (astrJour.length === 0 && coordJour.length === 0) return null;
+              const chLabel = (id: string | null) => {
+                const c = chauffeurs.find(x => x.id === id);
+                return c ? `${c.code} ${c.nom} ${c.prenom}` : '—';
+              };
+              const ligneBadge = (id: string | null) => {
+                const l = id ? lignes.find(x => x.id === id) : null;
+                return l ? <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: l.couleur || '#6b7280' }}>{l.code}</span> : null;
+              };
+              return (
+                <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  {astrJour.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                      <div className="px-3 py-2 bg-gray-800 text-white text-[10px] uppercase font-semibold flex items-center gap-1.5">
+                        <Shield className="w-3 h-3" /> Astreintes ({astrJour.length})
+                      </div>
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-gray-50">
+                          {astrJour.map(a => (
+                            <tr key={a.id} onClick={() => openAstreinteEdit(a)} className="cursor-pointer hover:bg-gray-50 transition-colors">
+                              <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{fmtHM(a.date_debut)} → {fmtHM(a.date_fin)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap">{chLabel(a.chauffeur_id)}</td>
+                              <td className="px-3 py-2">{ligneBadge(a.ligne_id)}</td>
+                              <td className="px-3 py-2 text-right">
+                                {a.is_brouillon && <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-100 text-blue-700">Brouillon</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {coordJour.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                      <div className="px-3 py-2 bg-indigo-600 text-white text-[10px] uppercase font-semibold flex items-center gap-1.5">
+                        <UserCheck className="w-3 h-3" /> Creneaux coordinateur ({coordJour.length})
+                      </div>
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-gray-50">
+                          {coordJour.map(cc => (
+                            <tr key={cc.id} onClick={() => openCoordEdit(cc)} className="cursor-pointer hover:bg-indigo-50/40 transition-colors">
+                              <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{fmtHM(cc.date_debut)} → {fmtHM(cc.date_fin)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap">{chLabel(cc.coordinateur_id)}</td>
+                              <td className="px-3 py-2">{ligneBadge(cc.ligne_id)}</td>
+                              <td className="px-3 py-2 text-right">
+                                {cc.is_brouillon && <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-100 text-blue-700">Brouillon</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
@@ -2246,10 +2414,29 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   <option value="">Selectionner un chauffeur...</option>
-                  {chauffeurs
-                    .filter(c => c.id !== editingCourse.chauffeur_id)
-                    .map(c => <option key={c.id} value={c.id}>{c.code} — {c.prenom} {c.nom}</option>)
-                  }
+                  {(() => {
+                    // Chauffeurs ACTIFS uniquement, et on signale ceux qui ont
+                    // deja une course chevauchant le creneau a remplacer.
+                    const slotStart = new Date(editingCourse.date_heure).getTime();
+                    const slotEnd = slotStart + (editingCourse.duree_minutes || 60) * 60000;
+                    const busy = new Set(
+                      courses
+                        .filter(c => c.id !== editingCourse.id && c.chauffeur_id
+                          && !['remplace', 'annule', 'incident'].includes(c.statut_realisation || ''))
+                        .filter(c => {
+                          const s = new Date(c.date_heure).getTime();
+                          return s < slotEnd && s + (c.duree_minutes || 60) * 60000 > slotStart;
+                        })
+                        .map(c => c.chauffeur_id as string)
+                    );
+                    return chauffeurs
+                      .filter(c => c.id !== editingCourse.chauffeur_id && c.statut === 'actif')
+                      .map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.code} — {c.prenom} {c.nom}{busy.has(c.id) ? ' (deja sur ce creneau)' : ''}
+                        </option>
+                      ));
+                  })()}
                 </select>
               </div>
               <div className="flex gap-3 pt-1">

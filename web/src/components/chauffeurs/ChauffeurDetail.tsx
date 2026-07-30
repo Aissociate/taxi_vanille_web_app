@@ -7,6 +7,10 @@ import { mParts, mDateStr, mAddDaysStr, mMondayStr, mMidnightISO } from '../../l
 
 type PeriodFilter = 'jour' | 'semaine' | 'mois' | 'annee' | 'total';
 
+// Tolerance (minutes) au-dela de laquelle un ecart depart reel / theorique est
+// signale, en retard comme en avance.
+const ECART_TOLERANCE_MN = 10;
+
 interface Course {
   id: string;
   date_heure: string;
@@ -76,6 +80,21 @@ interface CourseExecution {
   created_at: string;
 }
 
+interface Incident {
+  id: string;
+  type: string;
+  description: string | null;
+  created_at: string;
+  handled_at: string | null;
+  mesure_prise: string | null;
+}
+
+const INCIDENT_LABELS: Record<string, string> = {
+  accident: 'Accident', panne: 'Panne', retard: 'Retard', voie_bloquee: 'Voie bloquee',
+  passager_refuse: 'Passager refuse', securite: 'Securite', meteo: 'Meteo',
+  client_absent: 'Client absent', autre: 'Autre',
+};
+
 interface ChauffeurDetailProps {
   chauffeur: Chauffeur;
   ligneName?: string;
@@ -98,6 +117,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   const [kilometrage, setKilometrage] = useState<KilometrageEntry[]>([]);
   const [astreinteSessions, setAstreinteSessions] = useState<AstreinteSession[]>([]);
   const [courseExecutions, setCourseExecutions] = useState<CourseExecution[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [showAvanceForm, setShowAvanceForm] = useState(false);
   const [avanceForm, setAvanceForm] = useState({ montant: 0, motif: '', date_avance: new Date().toISOString().split('T')[0] });
   const [showDocUpload, setShowDocUpload] = useState(false);
@@ -113,6 +133,7 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
       loadKilometrage(),
       loadAstreinteSessions(),
       loadCourseExecutions(),
+      loadIncidents(),
     ]).catch(err => console.error('ChauffeurDetail load error:', err));
   }, [chauffeur.id, period, referenceDate]);
 
@@ -267,6 +288,22 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
     if (data) setCourseExecutions(data);
   }
 
+  // Incidents REELLEMENT declares (table incidents, remontee appli chauffeur).
+  // Avant : la fiche ne comptait que les courses annulees -> un incident declare
+  // par le chauffeur n'apparaissait nulle part dans son detail.
+  async function loadIncidents() {
+    const { from, to } = getDateRange();
+    const { data, error } = await supabase
+      .from('incidents')
+      .select('id, type, description, created_at, handled_at, mesure_prise')
+      .eq('chauffeur_id', chauffeur.id)
+      .gte('created_at', from)
+      .lt('created_at', to)
+      .order('created_at', { ascending: false });
+    if (error) { console.error('ChauffeurDetail incidents error:', error); return; }
+    if (data) setIncidents(data);
+  }
+
   async function handleAddAvance(e: React.FormEvent) {
     e.preventDefault();
     await supabase.from('chauffeur_avances').insert({
@@ -305,7 +342,9 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
   const coursesTerminees = courses.filter(c => c.statut_realisation === 'termine');
   const nbTermines = coursesTerminees.length;
   const nbTotal = courses.length;
-  const nbIncidents = courses.filter(c => c.statut_realisation === 'annule').length;
+  const nbAnnulations = courses.filter(c => c.statut_realisation === 'annule').length;
+  const nbIncidents = incidents.length;
+  const nbIncidentsOuverts = incidents.filter(i => !i.handled_at).length;
 
   function getTarifForCourse(course: Course): number {
     if (course.montant > 0) return course.montant; // prix autoritatif (trigger tarif_course)
@@ -568,9 +607,40 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
         <div className="card p-4">
           <p className="section-label text-red-600">Incidents</p>
           <p className={`text-2xl font-bold mt-1 ${nbIncidents > 0 ? 'text-red-600' : 'text-gray-900'}`}>{nbIncidents}</p>
-          <p className="text-xs text-gray-400">annulations</p>
+          <p className="text-xs text-gray-400">
+            {nbIncidentsOuverts > 0 ? `${nbIncidentsOuverts} en attente · ` : ''}{nbAnnulations} annulation{nbAnnulations > 1 ? 's' : ''}
+          </p>
         </div>
       </div>
+
+      {/* Incidents declares (table incidents) */}
+      {incidents.length > 0 && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="section-label">Incidents declares</h3>
+            <span className="text-xs text-gray-500">{incidents.length} sur la periode</span>
+          </div>
+          <div className="space-y-2">
+            {incidents.map(i => (
+              <div key={i.id} className="flex items-start gap-3 px-3 py-2 bg-gray-50 rounded-lg text-sm">
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 flex-shrink-0 mt-0.5">
+                  {INCIDENT_LABELS[i.type] || i.type}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-gray-900">{i.description || <span className="text-gray-400 italic">Sans description</span>}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {new Date(i.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}
+                    {i.mesure_prise && ` · mesure : ${i.mesure_prise}`}
+                  </p>
+                </div>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${i.handled_at ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {i.handled_at ? 'TRAITE' : 'EN ATTENTE'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Astreinte Sessions */}
       {astreinteSessions.length > 0 && (
@@ -632,8 +702,12 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
               const isComplete = e.statut === 'termine' || e.statut === 'completed';
               const courseData = (e as any).course;
               const theorique = courseData?.date_heure ? new Date(courseData.date_heure) : null;
-              const retardMin = theorique ? Math.round((debut.getTime() - theorique.getTime()) / 60000) : 0;
-              const isLate = retardMin > 10;
+              // Ecart depart reel - depart theorique : POSITIF = retard,
+              // NEGATIF = avance. L'avance etait ignoree (seul le retard etait
+              // signale) : un depart 2h avant l'heure passait inapercu.
+              const ecartMin = theorique ? Math.round((debut.getTime() - theorique.getTime()) / 60000) : 0;
+              const isLate = ecartMin > ECART_TOLERANCE_MN;
+              const isEarly = ecartMin < -ECART_TOLERANCE_MN;
               const isReplacement = courseData?.depart && !theorique;
               return (
                 <div key={e.id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 text-sm">
@@ -651,7 +725,10 @@ export function ChauffeurDetail({ chauffeur, ligneName, user, onEdit, onDelete, 
                     {fin && ` → ${fin.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte' })}`}
                   </span>
                   {isLate && (
-                    <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">+{retardMin}mn</span>
+                    <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded" title="Retard sur l'heure theorique">+{ecartMin}mn</span>
+                  )}
+                  {isEarly && (
+                    <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded" title="Depart en avance sur l'heure theorique">{ecartMin}mn avance</span>
                   )}
                   {dureeMin !== null && (
                     <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{dureeMin} mn</span>
