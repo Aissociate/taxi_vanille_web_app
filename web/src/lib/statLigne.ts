@@ -25,6 +25,7 @@ export type ChampId =
   | 'heure_reelle'
   | 'non_effectue'
   | 'retard'
+  | 'avance'
   | 'montees'
   | 'descentes'
   | 'heure_arrivee'
@@ -50,6 +51,7 @@ export const COLONNES: ColDef[] = [
   { id: 'heure_reelle', label: 'Heure reelle depart', type: 'time', width: 92 },
   { id: 'non_effectue', label: 'Trajet non effectue', type: 'bool', width: 66 },
   { id: 'retard', label: 'Depart > 10 mn retard', type: 'bool', width: 66 },
+  { id: 'avance', label: 'Depart > 10 mn avance', type: 'bool', width: 66 },
   { id: 'montees', label: 'Nbre montees', type: 'int', width: 74 },
   { id: 'descentes', label: 'Nbre descentes', type: 'int', width: 74 },
   { id: 'heure_arrivee', label: 'Heure arrivee finale', type: 'time', width: 92 },
@@ -83,6 +85,7 @@ function emptyCells(): Cellules {
     heure_reelle: '',
     non_effectue: '0',
     retard: '0',
+    avance: '0',
     montees: '0',
     descentes: '0',
     heure_arrivee: '',
@@ -108,6 +111,47 @@ export function tauxFrequentation(v: Cellules): number {
 export function toInt(s: string): number {
   const n = parseInt(s, 10);
   return Number.isFinite(n) ? n : 0;
+}
+
+/** Ecart signale (en minutes) au-dela duquel un depart est retard / en avance. */
+export const ECART_TOLERANCE_MN = 10;
+
+/** 'HH:MM' -> minutes depuis minuit, ou null si vide/illisible. */
+function hmToMinutes(hhmm: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec((hhmm || '').trim());
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+/**
+ * Champs CALCULES a partir des heures de la ligne. Recalcules a chaque fois sur
+ * les valeurs finales (base + saisies manuelles), sauf si l'utilisateur a lui-meme
+ * saisi le champ (l'override reste prioritaire).
+ *  - temps_aller = heure d'arrivee finale - heure reelle de depart (demande metier :
+ *    c'est le temps REELLEMENT mis, pas la duree planifiee de la course).
+ *  - retard / avance = ecart heure reelle - heure theorique, > 10 mn dans un sens
+ *    ou dans l'autre (l'avance n'etait pas signalee du tout).
+ */
+function derive(values: Cellules, overridden: Set<ChampId>, fallbackTempsAller: string): void {
+  if (!overridden.has('temps_aller')) {
+    const dep = hmToMinutes(values.heure_reelle);
+    const arr = hmToMinutes(values.heure_arrivee);
+    if (dep != null && arr != null) {
+      const diff = arr - dep;
+      values.temps_aller = String(diff < 0 ? diff + 24 * 60 : diff); // passage minuit
+    } else {
+      values.temps_aller = fallbackTempsAller;
+    }
+  }
+  const theo = hmToMinutes(values.heure_theo);
+  const reel = hmToMinutes(values.heure_reelle);
+  const ecart = theo != null && reel != null ? reel - theo : null;
+  if (!overridden.has('retard')) {
+    values.retard = ecart != null && ecart > ECART_TOLERANCE_MN ? '1' : '0';
+  }
+  if (!overridden.has('avance')) {
+    values.avance = ecart != null && ecart < -ECART_TOLERANCE_MN ? '1' : '0';
+  }
 }
 
 // ---- Type Supabase (course + jointures) ----------------------------------
@@ -156,6 +200,9 @@ function courseToBase(c: CourseRaw): Cellules {
   const exec = c.course_executions?.[0];
   if (exec?.heure_debut) cells.heure_reelle = fmtHM(exec.heure_debut);
   if (exec?.heure_fin) cells.heure_arrivee = fmtHM(exec.heure_fin);
+  // temps_aller / retard / avance sont CALCULES depuis les heures ci-dessus.
+  // A defaut d'execution, on retombe sur la duree planifiee de la course.
+  derive(cells, new Set(), c.duree_minutes != null ? String(c.duree_minutes) : '');
   void p;
   return cells;
 }
@@ -241,6 +288,9 @@ function mergeRows(baseByKey: Map<string, Cellules>, overrides: OverrideRow[]): 
         overridden.add(champ as ChampId);
       }
     }
+    // Les heures ont pu etre corrigees a la main -> on recalcule les champs
+    // derives non saisis explicitement.
+    derive(values, overridden, base.temps_aller);
     rows.push({
       rowKey,
       courseId: rowKey.startsWith('c:') ? rowKey.slice(2) : null,
@@ -264,6 +314,7 @@ function mergeRows(baseByKey: Map<string, Cellules>, overrides: OverrideRow[]): 
       values[champ as ChampId] = val ?? '';
       overridden.add(champ as ChampId);
     }
+    derive(values, overridden, base.temps_aller);
     rows.push({
       rowKey,
       courseId: null,
@@ -416,6 +467,7 @@ export interface SlotConso {
   totDescentes: number;
   nbNonEffectue: number;
   nbRetard: number;
+  nbAvance: number;
   tauxMoyen: number;
   tempsMoyen: number;
 }
@@ -442,6 +494,7 @@ export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): Slo
           totDescentes: 0,
           nbNonEffectue: 0,
           nbRetard: 0,
+          nbAvance: 0,
           tauxMoyen: 0,
           tempsMoyen: 0,
         };
@@ -459,6 +512,7 @@ export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): Slo
       slot.totDescentes += descentes;
       if (r.values.non_effectue === '1') slot.nbNonEffectue += 1;
       if (r.values.retard === '1') slot.nbRetard += 1;
+      if (r.values.avance === '1') slot.nbAvance += 1;
       const ta = tauxAcc.get(key)!;
       ta.sum += taux;
       ta.n += 1;

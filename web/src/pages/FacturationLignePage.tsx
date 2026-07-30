@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import type { User } from '@supabase/supabase-js';
 import {
   MapPin, ChevronLeft, ChevronRight, Plus, Trash2, RotateCcw, Download,
-  CalendarDays, CalendarRange, Calendar, Loader2, ChevronDown,
+  CalendarDays, CalendarRange, Calendar, Loader2, ChevronDown, UserRound,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import {
@@ -63,6 +63,7 @@ function rowToExport(values: StatRow['values']): CellValue[] {
     values.heure_reelle,
     values.non_effectue === '1' ? 1 : 0,
     values.retard === '1' ? 1 : 0,
+    values.avance === '1' ? 1 : 0,
     toInt(values.montees),
     toInt(values.descentes),
     values.heure_arrivee,
@@ -84,6 +85,9 @@ export function FacturationLignePage({ user }: Props) {
 
   const [rows, setRows] = useState<StatRow[]>([]);
   const [perDay, setPerDay] = useState<Map<string, StatRow[]>>(new Map());
+  // Filtre chauffeur : valeur = cellule `chauffeur` telle qu'affichee
+  // ("CODE - NOM Prenom"), '' = tous. S'applique aux 3 vues et aux totaux.
+  const [chauffeurFilter, setChauffeurFilter] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(0);
   const [exporting, setExporting] = useState(false);
@@ -131,9 +135,35 @@ export function FacturationLignePage({ user }: Props) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Chauffeurs presents dans les donnees chargees (vue courante) -> options du filtre.
+  const chauffeurOptions = useMemo(() => {
+    const set = new Set<string>();
+    const add = (rs: StatRow[]) => rs.forEach((r) => { if (r.values.chauffeur.trim()) set.add(r.values.chauffeur); });
+    if (view === 'jour') add(rows);
+    else perDay.forEach(add);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [view, rows, perDay]);
+
+  // Le filtre ne doit pas rester colle a un chauffeur absent de la nouvelle periode.
+  useEffect(() => {
+    if (chauffeurFilter && !chauffeurOptions.includes(chauffeurFilter)) setChauffeurFilter('');
+  }, [chauffeurOptions, chauffeurFilter]);
+
+  const visibleRows = useMemo(
+    () => (chauffeurFilter ? rows.filter((r) => r.values.chauffeur === chauffeurFilter) : rows),
+    [rows, chauffeurFilter],
+  );
+
+  const perDayFiltered = useMemo(() => {
+    if (!chauffeurFilter) return perDay;
+    const out = new Map<string, StatRow[]>();
+    perDay.forEach((rs, j) => out.set(j, rs.filter((r) => r.values.chauffeur === chauffeurFilter)));
+    return out;
+  }, [perDay, chauffeurFilter]);
+
   const conso = useMemo<SlotConso[]>(
-    () => (view === 'jour' ? [] : consolider(perDay, jours)),
-    [view, perDay, jours],
+    () => (view === 'jour' ? [] : consolider(perDayFiltered, jours)),
+    [view, perDayFiltered, jours],
   );
 
   // ---- Edition (vue jour) --------------------------------------------------
@@ -158,11 +188,13 @@ export function FacturationLignePage({ user }: Props) {
     }
   }
 
-  function onCellChange(idx: number, champ: ChampId, value: string) {
-    setRows((prev) => prev.map((r, i) => (i === idx ? applyLocalEdit(r, champ, value) : r)));
+  // Indexation par rowKey et non par position : la liste affichee peut etre
+  // filtree (par chauffeur), les index ne correspondent plus a `rows`.
+  function onCellChange(rowKey: string, champ: ChampId, value: string) {
+    setRows((prev) => prev.map((r) => (r.rowKey === rowKey ? applyLocalEdit(r, champ, value) : r)));
   }
-  function onCellCommit(idx: number, champ: ChampId, value: string) {
-    const row = rows[idx];
+  function onCellCommit(rowKey: string, champ: ChampId, value: string) {
+    const row = rows.find((r) => r.rowKey === rowKey);
     if (!row) return;
     persistCell(row, champ, value);
   }
@@ -231,7 +263,7 @@ export function FacturationLignePage({ user }: Props) {
   function syntheseSheet(name: string, slots: SlotConso[], daysCols: string[] | null): SheetData {
     const header: CellValue[] = ['Arret', 'Heure theo'];
     if (daysCols) header.push(...daysCols.map(ddmm));
-    header.push('Nb departs', 'Total montees', 'Total descentes', 'Taux moyen %', 'Temps moyen (min)', 'Non effectues', 'Retards');
+    header.push('Nb departs', 'Total montees', 'Total descentes', 'Taux moyen %', 'Temps moyen (min)', 'Non effectues', 'Retards', 'Avances');
     const rowsX = slots.map((s) => {
       const line: CellValue[] = [s.arret, s.heure_theo];
       if (daysCols) line.push(...daysCols.map((j) => s.parJour.get(j)?.montees ?? 0));
@@ -243,6 +275,7 @@ export function FacturationLignePage({ user }: Props) {
         Math.round(s.tempsMoyen * 10) / 10,
         s.nbNonEffectue,
         s.nbRetard,
+        s.nbAvance,
       );
       return line;
     });
@@ -279,17 +312,18 @@ export function FacturationLignePage({ user }: Props) {
   // ---- Totaux vue jour -----------------------------------------------------
 
   const totaux = useMemo(() => {
-    let montees = 0, descentes = 0, nonEff = 0, retard = 0, tauxSum = 0, tauxN = 0;
-    for (const r of rows) {
+    let montees = 0, descentes = 0, nonEff = 0, retard = 0, avance = 0, tauxSum = 0, tauxN = 0;
+    for (const r of visibleRows) {
       montees += toInt(r.values.montees);
       descentes += toInt(r.values.descentes);
       if (r.values.non_effectue === '1') nonEff += 1;
       if (r.values.retard === '1') retard += 1;
+      if (r.values.avance === '1') avance += 1;
       tauxSum += tauxFrequentation(r.values);
       tauxN += 1;
     }
-    return { montees, descentes, nonEff, retard, tauxMoyen: tauxN > 0 ? tauxSum / tauxN : 0, nb: rows.length };
-  }, [rows]);
+    return { montees, descentes, nonEff, retard, avance, tauxMoyen: tauxN > 0 ? tauxSum / tauxN : 0, nb: visibleRows.length };
+  }, [visibleRows]);
 
   const nbModifs = useMemo(() => rows.reduce((n, r) => n + (r.manual ? 1 : r.overridden.size), 0), [rows]);
 
@@ -312,6 +346,20 @@ export function FacturationLignePage({ user }: Props) {
               className="pl-9 pr-8 py-2.5 border border-gray-200 rounded-xl text-sm font-medium bg-white focus:ring-2 focus:ring-amber-500 outline-none appearance-none"
             >
               {lignes.map((l) => <option key={l.id} value={l.id}>{l.code} - {l.nom}</option>)}
+            </select>
+          </div>
+          {/* Chauffeur */}
+          <div className="relative">
+            <UserRound className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <select
+              value={chauffeurFilter}
+              onChange={(e) => setChauffeurFilter(e.target.value)}
+              disabled={chauffeurOptions.length === 0}
+              className="pl-9 pr-8 py-2.5 border border-gray-200 rounded-xl text-sm font-medium bg-white focus:ring-2 focus:ring-amber-500 outline-none appearance-none disabled:opacity-50 max-w-[220px]"
+              title="Filtrer les statistiques sur un chauffeur"
+            >
+              <option value="">Tous les chauffeurs</option>
+              {chauffeurOptions.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           {/* Export */}
@@ -361,7 +409,7 @@ export function FacturationLignePage({ user }: Props) {
         </div>
       ) : view === 'jour' ? (
         <DayTable
-          rows={rows}
+          rows={visibleRows}
           totaux={totaux}
           nbModifs={nbModifs}
           saving={saving > 0}
@@ -384,13 +432,13 @@ export function FacturationLignePage({ user }: Props) {
 
 interface DayTableProps {
   rows: StatRow[];
-  totaux: { montees: number; descentes: number; nonEff: number; retard: number; tauxMoyen: number; nb: number };
+  totaux: { montees: number; descentes: number; nonEff: number; retard: number; avance: number; tauxMoyen: number; nb: number };
   nbModifs: number;
   saving: boolean;
   sortMode: SortMode;
   onSortChange: (m: SortMode) => void;
-  onCellChange: (idx: number, champ: ChampId, value: string) => void;
-  onCellCommit: (idx: number, champ: ChampId, value: string) => void;
+  onCellChange: (rowKey: string, champ: ChampId, value: string) => void;
+  onCellCommit: (rowKey: string, champ: ChampId, value: string) => void;
   onDeleteRow: (row: StatRow) => void;
   onAddRow: () => void;
   onResetDay: () => void;
@@ -443,7 +491,7 @@ function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCe
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan={COLONNES.length + 3} className="text-center py-10 text-gray-400">Aucun depart ce jour. Utilisez "Ajouter une ligne" pour saisir.</td></tr>
-            ) : rows.map((row, idx) => (
+            ) : rows.map((row) => (
               <tr key={row.rowKey} className={`border-b border-gray-50 hover:bg-gray-50/50 ${row.manual ? 'bg-teal-50/30' : ''}`}>
                 {COLONNES.map((col) => (
                   <td key={col.id} className="px-1 py-0.5">
@@ -451,8 +499,8 @@ function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCe
                       col={col}
                       value={row.values[col.id]}
                       overridden={row.overridden.has(col.id)}
-                      onChange={(v) => onCellChange(idx, col.id, v)}
-                      onCommit={(v) => onCellCommit(idx, col.id, v)}
+                      onChange={(v) => onCellChange(row.rowKey, col.id, v)}
+                      onCommit={(v) => onCellCommit(row.rowKey, col.id, v)}
                     />
                   </td>
                 ))}
@@ -469,12 +517,17 @@ function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCe
           {rows.length > 0 && (
             <tfoot>
               <tr className="bg-gray-50 border-t-2 border-gray-200 font-semibold text-gray-700">
+                {/* Aligne sur COLONNES : arret..heure_reelle (5), non_effectue,
+                    retard, avance, montees, descentes, puis heure_arrivee..capacite
+                    (4), Moy., Taux, colonne d'action. */}
                 <td className="px-2 py-2" colSpan={5}>TOTAL ({totaux.nb} departs)</td>
                 <td className="px-2 py-2 text-center tabular-nums">{totaux.nonEff}</td>
                 <td className="px-2 py-2 text-center tabular-nums">{totaux.retard}</td>
+                <td className="px-2 py-2 text-center tabular-nums">{totaux.avance}</td>
                 <td className="px-2 py-2 text-center tabular-nums">{totaux.montees}</td>
                 <td className="px-2 py-2 text-center tabular-nums">{totaux.descentes}</td>
                 <td colSpan={4} />
+                <td />
                 <td className="px-2 py-2 text-center tabular-nums">{(totaux.tauxMoyen * 100).toFixed(0)}%</td>
                 <td />
               </tr>
@@ -537,8 +590,9 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
         totDescentes: acc.totDescentes + s.totDescentes,
         nonEff: acc.nonEff + s.nbNonEffectue,
         retard: acc.retard + s.nbRetard,
+        avance: acc.avance + s.nbAvance,
       }),
-      { nbDeparts: 0, totMontees: 0, totDescentes: 0, nonEff: 0, retard: 0 },
+      { nbDeparts: 0, totMontees: 0, totDescentes: 0, nonEff: 0, retard: 0, avance: 0 },
     );
   }, [slots]);
 
@@ -561,6 +615,7 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
             <th className="px-2 py-2 text-center font-semibold">Temps moy.</th>
             <th className="px-2 py-2 text-center font-semibold">Non eff.</th>
             <th className="px-2 py-2 text-center font-semibold">Retards</th>
+            <th className="px-2 py-2 text-center font-semibold">Avances</th>
           </tr>
         </thead>
         <tbody>
@@ -579,6 +634,7 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
               <td className="px-2 py-1.5 text-center tabular-nums">{s.tempsMoyen.toFixed(0)}</td>
               <td className="px-2 py-1.5 text-center tabular-nums">{s.nbNonEffectue || ''}</td>
               <td className="px-2 py-1.5 text-center tabular-nums">{s.nbRetard || ''}</td>
+              <td className="px-2 py-1.5 text-center tabular-nums">{s.nbAvance || ''}</td>
             </tr>
           ))}
         </tbody>
@@ -592,6 +648,7 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
             <td />
             <td className="px-2 py-2 text-center tabular-nums">{totBas.nonEff}</td>
             <td className="px-2 py-2 text-center tabular-nums">{totBas.retard}</td>
+            <td className="px-2 py-2 text-center tabular-nums">{totBas.avance}</td>
           </tr>
         </tfoot>
       </table>
