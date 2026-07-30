@@ -37,7 +37,18 @@ mobile/android/build
 mobile/android/local.properties
 mobile/android/app/release
 
+# Regeneres par `npx cap sync` (copie du build web + plugins cordova) : ne pas versionner
+mobile/android/app/src/main/assets/
+mobile/android/app/src/main/res/xml/config.xml
+mobile/android/capacitor-cordova-android-plugins/
+
+# Config MCP locale (poste de dev)
+.mcp.json
+
 # Signature release — keystore + mots de passe (JAMAIS versionnes, a sauvegarder ailleurs)
 *.jks
 *.keystore
 mobile/android/keystore.properties
+
+# Crash dumps / junk
+*.stackdump

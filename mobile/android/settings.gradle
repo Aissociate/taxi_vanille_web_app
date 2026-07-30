@@ -1,3 +1,9 @@
+// Permet a Gradle de telecharger automatiquement le JDK 21 exige par
+// Capacitor 8 (la machine n'a que le JDK 17). Telecharge une fois, puis mis en cache.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+}
+
 include ':app'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
