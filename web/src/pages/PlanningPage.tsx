@@ -805,6 +805,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
   //  - si des courses sont cochees (mode selection), on ne publie que celles-la ;
   //  - sinon on publie les brouillons filtres a l'ecran (ligne + chauffeur +
   //    periode + periode de vue), ce qui permet de publier "par ligne / chauffeur".
+  // Les ASTREINTES et les CRENEAUX COORDINATEUR en brouillon sont publies avec
+  // les courses (avant : uniquement un par un via leur formulaire).
   async function publishDrafts() {
     const usingSelection = selectMode && selectedCourseIds.size > 0;
     const targets = (usingSelection
@@ -812,17 +814,31 @@ export function PlanningPage({ user }: PlanningPageProps) {
       : filteredCourses
     ).filter(c => c.is_brouillon);
     const draftIds = targets.map(c => c.id);
-    if (draftIds.length === 0) { alert('Aucun brouillon a publier dans la selection.'); return; }
+    // Le mode selection (cases a cocher) ne porte que sur les courses : on ne
+    // publie alors ni astreinte ni creneau coordinateur.
+    const astreinteIds = usingSelection ? [] : publishableAstreintes.map(a => a.id);
+    const creneauIds = usingSelection ? [] : publishableCreneaux.map(cc => cc.id);
+    const total = draftIds.length + astreinteIds.length + creneauIds.length;
+    if (total === 0) { alert('Aucun brouillon a publier dans la selection.'); return; }
     const scope: string[] = [];
     if (usingSelection) scope.push('courses selectionnees');
     if (lineFilter !== 'all') scope.push(`ligne ${lignes.find(l => l.id === lineFilter)?.code || ''}`);
     if (chauffeurFilter !== 'all') scope.push(`chauffeur ${chauffeurs.find(c => c.id === chauffeurFilter)?.code || ''}`);
     if (periodeFilter !== 'all') scope.push(periodeLabels[periodeFilter] || periodeFilter);
     const scopeStr = scope.length ? ` (${scope.join(' · ')})` : '';
-    if (!confirm(`Publier ${draftIds.length} brouillon(s)${scopeStr} ?`)) return;
-    await supabase.from('courses').update({ is_brouillon: false }).in('id', draftIds);
-    await logAction('publish', 'courses', null, `Publication de ${draftIds.length} brouillon(s)${scopeStr}`, null, { ids: draftIds });
+    const detail: string[] = [];
+    if (draftIds.length) detail.push(`${draftIds.length} course(s)`);
+    if (astreinteIds.length) detail.push(`${astreinteIds.length} astreinte(s)`);
+    if (creneauIds.length) detail.push(`${creneauIds.length} creneau(x) coordinateur`);
+    const detailStr = detail.join(', ');
+    if (!confirm(`Publier ${detailStr}${scopeStr} ?`)) return;
+    if (draftIds.length) await supabase.from('courses').update({ is_brouillon: false }).in('id', draftIds);
+    if (astreinteIds.length) await supabase.from('astreintes').update({ is_brouillon: false }).in('id', astreinteIds);
+    if (creneauIds.length) await supabase.from('coordinateur_creneaux').update({ is_brouillon: false }).in('id', creneauIds);
+    await logAction('publish', 'courses', null, `Publication de ${detailStr}${scopeStr}`, null, { courses: draftIds, astreintes: astreinteIds, creneaux: creneauIds });
     loadCourses();
+    if (astreinteIds.length) loadAstreintes();
+    if (creneauIds.length) loadCoordCreneaux();
   }
 
   const [editingAstreinte, setEditingAstreinte] = useState<Astreinte | null>(null);
@@ -1222,6 +1238,28 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return result;
   }, [courses, lineFilter, chauffeurFilter, periodeFilter]);
 
+  // Astreintes / creneaux coordinateur en BROUILLON publiables selon les filtres
+  // a l'ecran (memes regles que les courses : ligne + chauffeur). Le filtre de
+  // periode AM/PM ne s'applique pas a ces objets : ils ne portent pas de periode
+  // -> on ne les publie qu'en filtre "tout" ou "Astr." (astreintes uniquement).
+  const publishableAstreintes = useMemo(() => {
+    if (periodeFilter === 'matin' || periodeFilter === 'apres_midi') return [];
+    return astreintes.filter(a =>
+      a.is_brouillon
+      && (lineFilter === 'all' || a.ligne_id === lineFilter)
+      && (chauffeurFilter === 'all' || a.chauffeur_id === chauffeurFilter)
+    );
+  }, [astreintes, lineFilter, chauffeurFilter, periodeFilter]);
+
+  const publishableCreneaux = useMemo(() => {
+    if (periodeFilter !== 'all') return [];
+    return coordCreneaux.filter(cc =>
+      cc.is_brouillon
+      && (lineFilter === 'all' || cc.ligne_id === lineFilter)
+      && (chauffeurFilter === 'all' || cc.coordinateur_id === chauffeurFilter)
+    );
+  }, [coordCreneaux, lineFilter, chauffeurFilter, periodeFilter]);
+
   const chauffeursByLigne = useMemo(() => {
     const groups: Map<string | null, Chauffeur[]> = new Map();
     filteredChauffeurs.forEach(c => {
@@ -1291,13 +1329,19 @@ export function PlanningPage({ user }: PlanningPageProps) {
       : `${['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'][currentDate.getMonth()]} ${currentDate.getFullYear()}`;
 
   const nonPlanifieCount = courses.filter(c => c.statut_planification === 'non_planifie').length;
-  const brouillonCount = courses.filter(c => c.is_brouillon).length;
+  // Brouillons de la periode affichee, TOUS types confondus (courses, astreintes,
+  // creneaux coordinateur) -> conditionne l'affichage du bouton Publier.
+  const brouillonCount = courses.filter(c => c.is_brouillon).length
+    + astreintes.filter(a => a.is_brouillon).length
+    + coordCreneaux.filter(cc => cc.is_brouillon).length;
   // Nombre de brouillons reellement publiables selon la selection courante
   // (courses cochees, sinon filtres ligne/chauffeur/periode) -> compteur du bouton.
-  const publishableCount = (selectMode && selectedCourseIds.size > 0
+  const usingCourseSelection = selectMode && selectedCourseIds.size > 0;
+  const publishableCount = (usingCourseSelection
     ? filteredCourses.filter(c => selectedCourseIds.has(c.id))
-    : filteredCourses).filter(c => c.is_brouillon).length;
-  const publishScoped = publishableCount !== brouillonCount || (selectMode && selectedCourseIds.size > 0);
+    : filteredCourses).filter(c => c.is_brouillon).length
+    + (usingCourseSelection ? 0 : publishableAstreintes.length + publishableCreneaux.length);
+  const publishScoped = publishableCount !== brouillonCount || usingCourseSelection;
 
   const periodeLabels: Record<string, string> = {
     matin: 'AM',
