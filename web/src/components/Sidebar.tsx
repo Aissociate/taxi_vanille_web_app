@@ -23,7 +23,6 @@ import {
   Smartphone,
   ExternalLink,
   Timer,
-  DatabaseBackup,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -46,7 +45,6 @@ export type Page =
   | 'param-planning'
   | 'param-tarifs'
   | 'param-users'
-  | 'param-sauvegardes'
   | 'developpement'
   | 'debug-ai';
 
@@ -79,7 +77,6 @@ const paramItems = [
   { id: 'param-lignes' as Page, label: 'Lignes', icon: MapPin },
   { id: 'param-tarifs' as Page, label: 'Tarifs', icon: Coins },
   { id: 'param-users' as Page, label: 'Utilisateurs', icon: KeyRound },
-  { id: 'param-sauvegardes' as Page, label: 'Sauvegardes', icon: DatabaseBackup },
 ];
 
 export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
