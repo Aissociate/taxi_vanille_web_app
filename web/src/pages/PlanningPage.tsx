@@ -196,6 +196,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
     }
   }, []);
   useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); }, [currentDate, view]);
+  // Changer de date ou de vue vide la selection : sinon des courses cochees puis
+  // devenues INVISIBLES (autre periode) resteraient supprimables/reaffectables
+  // en lot sans que l'utilisateur les voie.
+  useEffect(() => { setSelectedCourseIds(new Set()); }, [currentDate, view]);
 
   // Rafraichissement temps reel : tous les directeurs voient l'etat des courses
   // a jour (statut_realisation mis a jour par les chauffeurs) sans recharger la
@@ -1069,8 +1073,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function handleBatchDelete() {
     if (selectedCourseIds.size === 0) return;
-    if (!confirm(`Supprimer definitivement ${selectedCourseIds.size} course(s) ?`)) return;
-    const ids = Array.from(selectedCourseIds);
+    // Ceinture et bretelles : on ne supprime que des courses de la periode
+    // AFFICHEE (chargees a l'ecran), jamais un id residuel d'une autre vue.
+    const ids = Array.from(selectedCourseIds).filter(id => courses.some(c => c.id === id));
+    if (ids.length === 0) { setSelectedCourseIds(new Set()); return; }
+    if (!confirm(`Supprimer definitivement ${ids.length} course(s) de la periode affichee ?`)) return;
     const { error, count } = await supabase.from('courses').delete({ count: 'exact' }).in('id', ids);
     if (error) { alert('Suppression impossible : ' + error.message); return; }
     if (!count) { alert('Aucune course supprimee (droits insuffisants ?).'); return; }
