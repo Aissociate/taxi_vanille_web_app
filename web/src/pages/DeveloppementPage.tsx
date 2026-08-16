@@ -293,6 +293,12 @@ export function DeveloppementPage({ user }: DeveloppementPageProps) {
                       </div>
                       <h3 className="font-semibold text-gray-900 truncate">{bug.titre}</h3>
                       {bug.description && <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{bug.description}</p>}
+                      {bug.resolution_comment && (bug.statut === 'resolved' || bug.statut === 'closed') && (
+                        <div className="mt-2 flex items-start gap-1.5 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
+                          <p className="text-xs text-emerald-800 line-clamp-3">{bug.resolution_comment}</p>
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-3">
                       {bug.has_screenshot && (
