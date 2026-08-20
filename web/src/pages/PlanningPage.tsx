@@ -196,10 +196,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
     }
   }, []);
   useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); }, [currentDate, view]);
-  // Changer de date ou de vue vide la selection : sinon des courses cochees puis
-  // devenues INVISIBLES (autre periode) resteraient supprimables/reaffectables
-  // en lot sans que l'utilisateur les voie.
-  useEffect(() => { setSelectedCourseIds(new Set()); }, [currentDate, view]);
 
   // Rafraichissement temps reel : tous les directeurs voient l'etat des courses
   // a jour (statut_realisation mis a jour par les chauffeurs) sans recharger la
@@ -341,7 +337,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [joursFeries, setJoursFeries] = useState<string[]>([]);
   const [dupSelectedIds, setDupSelectedIds] = useState<Set<string>>(new Set());
   const [dupChauffeurFilter, setDupChauffeurFilter] = useState('');
-  const [dupLigneFilter, setDupLigneFilter] = useState('');
   const [dupTargetDates, setDupTargetDates] = useState<string[]>([]);
   const [dupCalMonth, setDupCalMonth] = useState(new Date());
   const [dupIncludeAstreintes, setDupIncludeAstreintes] = useState(false);
@@ -371,7 +366,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setDupDays({ lun: true, mar: true, mer: true, jeu: true, ven: true, sam: false, dim: false, ferie: false });
     setDupWeeks(1);
     setDupChauffeurFilter('');
-    setDupLigneFilter('');
     setDupTargetDates([]);
     setDupCalMonth(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
     setDupIncludeAstreintes(false);
@@ -422,14 +416,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return mMondayStr(dateStr) === mMondayStr(currentDate);
   }
 
-  // Le filtre ligne de la modale s'applique aussi aux astreintes / creneaux :
-  // "dupliquer la L3" ne doit pas embarquer les astreintes des autres lignes.
   function getDuplicableAstreintes(): Astreinte[] {
-    return astreintes.filter(a => inCurrentView(a.date_debut) && (!dupLigneFilter || a.ligne_id === dupLigneFilter));
+    return astreintes.filter(a => inCurrentView(a.date_debut));
   }
 
   function getDuplicableCreneaux(): CoordCreneau[] {
-    return coordCreneaux.filter(cc => inCurrentView(cc.date_debut) && (!dupLigneFilter || cc.ligne_id === dupLigneFilter));
+    return coordCreneaux.filter(cc => inCurrentView(cc.date_debut));
   }
 
   // Decale un instant de nDays jours en CONSERVANT l'heure de Mayotte (mur).
@@ -459,14 +451,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setDupLoading(true);
     let skippedDup = 0;
     try {
-      // On respecte les filtres chauffeur ET ligne de la modale : sans ca, des
-      // courses cochees mais masquees (autres chauffeurs/lignes) etaient
-      // dupliquees a l'insu.
-      const sourceCourses = getDuplicableCourses().filter(c =>
-        dupSelectedIds.has(c.id)
-        && (!dupChauffeurFilter || c.chauffeur_id === dupChauffeurFilter)
-        && (!dupLigneFilter || c.ligne_id === dupLigneFilter)
-      );
+      // On respecte le filtre chauffeur de la modale : sans ca, des courses
+      // cochees mais masquees (autres chauffeurs) etaient dupliquees a l'insu.
+      const sourceCourses = getDuplicableCourses().filter(c => dupSelectedIds.has(c.id) && (!dupChauffeurFilter || c.chauffeur_id === dupChauffeurFilter));
       const sourceAstreintes = dupIncludeAstreintes ? getDuplicableAstreintes() : [];
       const sourceCreneaux = dupIncludeCreneaux ? getDuplicableCreneaux() : [];
 
@@ -1082,11 +1069,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function handleBatchDelete() {
     if (selectedCourseIds.size === 0) return;
-    // Ceinture et bretelles : on ne supprime que des courses de la periode
-    // AFFICHEE (chargees a l'ecran), jamais un id residuel d'une autre vue.
-    const ids = Array.from(selectedCourseIds).filter(id => courses.some(c => c.id === id));
-    if (ids.length === 0) { setSelectedCourseIds(new Set()); return; }
-    if (!confirm(`Supprimer definitivement ${ids.length} course(s) de la periode affichee ?`)) return;
+    if (!confirm(`Supprimer definitivement ${selectedCourseIds.size} course(s) ?`)) return;
+    const ids = Array.from(selectedCourseIds);
     const { error, count } = await supabase.from('courses').delete({ count: 'exact' }).in('id', ids);
     if (error) { alert('Suppression impossible : ' + error.message); return; }
     if (!count) { alert('Aucune course supprimee (droits insuffisants ?).'); return; }
@@ -2196,12 +2180,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
       {/* Duplication Modal */}
       {showDuplicate && (() => {
         const duplicable = getDuplicableCourses();
-        const filteredDup = duplicable.filter(c =>
-          (!dupChauffeurFilter || c.chauffeur_id === dupChauffeurFilter)
-          && (!dupLigneFilter || c.ligne_id === dupLigneFilter)
-        );
+        const filteredDup = dupChauffeurFilter
+          ? duplicable.filter(c => c.chauffeur_id === dupChauffeurFilter)
+          : duplicable;
         const chauffeurIdsInView = [...new Set(duplicable.map(c => c.chauffeur_id).filter(Boolean))];
-        const ligneIdsInView = [...new Set(duplicable.map(c => c.ligne_id).filter(Boolean))];
 
         // Calendrier jour-par-jour (cible de duplication). Les jours cochés
         // alimentent dupTargetDates ('YYYY-MM-DD'), gérés par handleDuplicate.
@@ -2252,15 +2234,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     <button type="button" onClick={() => setDupSelectedIds(new Set())} className="text-[10px] text-gray-500 font-medium hover:underline">Aucun</button>
                   </div>
                 </div>
-                {ligneIdsInView.length > 1 && (
-                  <select value={dupLigneFilter} onChange={(e) => setDupLigneFilter(e.target.value)} className="w-full mb-2 px-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-amber-500 outline-none">
-                    <option value="">Toutes les lignes</option>
-                    {ligneIdsInView.map(lid => {
-                      const li = lignes.find(x => x.id === lid);
-                      return <option key={lid} value={lid!}>{li ? `${li.code} - ${li.depart} ↔ ${li.arrivee}` : lid}</option>;
-                    })}
-                  </select>
-                )}
                 {chauffeurIdsInView.length > 1 && (
                   <select value={dupChauffeurFilter} onChange={(e) => setDupChauffeurFilter(e.target.value)} className="w-full mb-2 px-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-amber-500 outline-none">
                     <option value="">Tous les chauffeurs</option>

@@ -17,7 +17,6 @@ import { LignesPage } from './pages/settings/LignesPage';
 import { TarifsPage } from './pages/settings/TarifsPage';
 import { PlanningSettingsPage } from './pages/settings/PlanningSettingsPage';
 import { UsersPage } from './pages/settings/UsersPage';
-import { SauvegardesPage } from './pages/settings/SauvegardesPage';
 import { CarteGPSPage } from './pages/CarteGPSPage';
 import { DeveloppementPage } from './pages/DeveloppementPage';
 import { DebugAIPage } from './pages/DebugAIPage';
@@ -114,7 +113,6 @@ function App() {
       case 'param-planning': return <PlanningSettingsPage user={user!} />;
       case 'param-tarifs': return <TarifsPage user={user!} />;
       case 'param-users': return <UsersPage user={user!} />;
-      case 'param-sauvegardes': return <SauvegardesPage user={user!} />;
       case 'developpement': return <DeveloppementPage user={user!} />;
       case 'debug-ai': return <DebugAIPage />;
       default: return <DashboardPage />;
