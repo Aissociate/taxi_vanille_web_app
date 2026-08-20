@@ -45,17 +45,35 @@ export function IncidentsPage(_props: IncidentsPageProps) {
     loadData();
   }, []);
 
+  // Chargement PAGINE : `.limit(100)` plafonnait la liste a 100 incidents, donc
+  // le compteur "Total" restait bloque a 100 des que la base en contenait plus
+  // (et les plus anciens n'etaient jamais consultables). Supabase renvoie au
+  // maximum 1000 lignes par requete : on boucle jusqu'a epuisement.
+  async function fetchAllIncidents(): Promise<Incident[]> {
+    const all: Incident[] = [];
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('incidents')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      const rows = (data || []) as Incident[];
+      all.push(...rows);
+      if (rows.length < PAGE) break;
+    }
+    return all;
+  }
+
   async function loadData() {
     setLoading(true);
     try {
-      const [incRes, chRes] = await Promise.all([
-        supabase.from('incidents')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(100),
+      const [incidentsAll, chRes] = await Promise.all([
+        fetchAllIncidents(),
         supabase.from('chauffeurs').select('id, nom, prenom, code'),
       ]);
-      if (incRes.data) setIncidents(incRes.data);
+      setIncidents(incidentsAll);
       if (chRes.data) setChauffeurs(chRes.data);
     } catch (err) {
       console.error('Incidents load error:', err);

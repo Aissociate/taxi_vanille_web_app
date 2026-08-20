@@ -64,10 +64,14 @@ export function BugReportButton({ user }: BugReportButtonProps) {
 
   return (
     <>
+      {/* z-index tres eleve : le bouton passait DERRIERE les fenetres modales
+          (z-50) et derriere les controles Leaflet de la carte GPS (z-1000), il
+          etait donc inaccessible sur ces ecrans — precisement ceux ou l'on veut
+          signaler un bug avec la copie d'ecran. */}
       <button
         onClick={handleOpen}
         disabled={capturing}
-        className="bug-report-btn fixed bottom-6 right-6 z-40 w-14 h-14 bg-red-600 hover:bg-red-700 text-white rounded-full shadow-lg hover:shadow-xl transition-all flex items-center justify-center group disabled:opacity-60"
+        className="bug-report-btn fixed bottom-6 right-6 z-[3000] w-14 h-14 bg-red-600 hover:bg-red-700 text-white rounded-full shadow-lg hover:shadow-xl transition-all flex items-center justify-center group disabled:opacity-60"
         title="Signaler un bug"
       >
         {capturing ? (
@@ -78,7 +82,7 @@ export function BugReportButton({ user }: BugReportButtonProps) {
       </button>
 
       {showModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 z-[3001] flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-red-50 to-orange-50">
               <div className="flex items-center gap-3">

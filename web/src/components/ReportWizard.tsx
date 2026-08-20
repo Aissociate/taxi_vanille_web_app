@@ -18,7 +18,11 @@ interface Course {
   date_heure: string;
   depart: string;
   arrivee: string;
+  passagers_arrivee?: number;
   statut: string;
+  statut_realisation?: string | null;
+  notes?: string | null;
+  is_brouillon?: boolean;
   montant: number;
   chauffeur_id: string | null;
   client_id: string | null;
@@ -31,7 +35,10 @@ interface Course {
 
 interface TripRow {
   heure_depart: string;
+  nb_trajets: number;
+  nb_realises: number;
   nbre_usagers: number;
+  capacite_max: number;
   taux_frequentation: number;
   temps_moyen: string;
 }
@@ -44,6 +51,8 @@ interface DayData {
   ferie_intitule: string;
   matin: {
     trips: TripRow[];
+    nb_trajets: number;
+    nb_realises: number;
     total_usagers: number;
     capacite_max: number;
     taux_frequentation: number;
@@ -52,6 +61,8 @@ interface DayData {
   };
   soir: {
     trips: TripRow[];
+    nb_trajets: number;
+    nb_realises: number;
     total_usagers: number;
     capacite_max: number;
     taux_frequentation: number;
@@ -59,6 +70,8 @@ interface DayData {
     ecart_type: string;
   };
   journee: {
+    nb_trajets: number;
+    nb_realises: number;
     total_usagers: number;
     capacite_max: number;
     taux_frequentation: number;
@@ -71,9 +84,11 @@ interface WeekSummary {
   semaine: number;
   date_debut: string;
   date_fin: string;
-  matin: { usagers: number; taux: number; temps_moyen: string; ecart_type: string };
-  soir: { usagers: number; taux: number; temps_moyen: string; ecart_type: string };
+  matin: { usagers: number; trajets: number; capacite: number; taux: number; temps_moyen: string; ecart_type: string };
+  soir: { usagers: number; trajets: number; capacite: number; taux: number; temps_moyen: string; ecart_type: string };
   total_usagers: number;
+  total_trajets: number;
+  total_realises: number;
   taux_global: number;
 }
 
@@ -89,6 +104,7 @@ interface ReportWizardProps {
 
 interface Chauffeur {
   id: string;
+  code: string | null;
   nom: string;
   prenom: string;
   vehicule_places: number;
@@ -103,6 +119,58 @@ interface JourFerie {
 const DAYS_FR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 const DAYS_SHORT = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
 const MONTHS_FR = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre'];
+
+// Capacite d'UN trajet, chauffeur exclu : un vehicule 9 places transporte 8
+// usagers. Utilisee a defaut d'information sur le vehicule de la ligne.
+const CAPACITE_TRAJET_DEFAUT = 8;
+
+type Sens = 'tous' | 'aller' | 'retour';
+
+/** Comparaison de lieux tolerante (accents, casse, "PEM PASSAMAINTY" ~ "PASSAMAINTY"). */
+function normLieu(s: string | null | undefined): string {
+  return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+function memeLieu(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = normLieu(a), y = normLieu(b);
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+}
+
+/**
+ * Sens d'une course par rapport a la ligne : ALLER = dans le sens
+ * depart -> arrivee de la ligne, RETOUR = l'inverse. Les arrets intermediaires
+ * (ex. "M'Tsapere" sur la L3) sont rattaches grace au point d'arrivee.
+ */
+function sensCourse(c: Course, ligne: Ligne | undefined): 'aller' | 'retour' | 'autre' {
+  if (!ligne) return 'autre';
+  if (memeLieu(c.depart, ligne.depart)) return 'aller';
+  if (memeLieu(c.depart, ligne.arrivee)) return 'retour';
+  if (memeLieu(c.arrivee, ligne.arrivee)) return 'aller';
+  if (memeLieu(c.arrivee, ligne.depart)) return 'retour';
+  return 'autre';
+}
+
+/**
+ * Nombre d'usagers d'une course = MAX(montees, descentes) — regle metier.
+ * Avant : `nb_passagers || passagers_depart || 40`, l'estimation historique a 40
+ * usagers par trajet faisait exploser le taux de frequentation des que le
+ * chauffeur n'avait pas saisi ses comptages.
+ */
+function usagersCourse(c: Course): number {
+  return Math.max(c.passagers_depart || 0, c.passagers_arrivee || 0, c.nb_passagers || 0);
+}
+
+/**
+ * Un trajet n'entre dans le calcul du taux de frequentation que s'il a
+ * REELLEMENT ETE FAIT : sinon on ajouterait 8 places offertes face a 0 usager,
+ * ce qui ecrase le taux (une grande partie des courses passees restent au
+ * statut "programme", jamais cloturees dans l'appli chauffeur).
+ * Le nombre de trajets PLANIFIES reste affiche a cote, pour comparaison.
+ */
+function estRealise(c: Course): boolean {
+  const s = c.statut_realisation || c.statut || '';
+  return s === 'termine' || s === 'terminee' || s === 'en_cours' || usagersCourse(c) > 0;
+}
 
 function formatMinutes(minutes: number): string {
   if (minutes <= 0) return '00:00';
@@ -163,14 +231,20 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
   });
   const [chauffeurs, setChauffeurs] = useState<Chauffeur[]>([]);
   const [joursFeries, setJoursFeries] = useState<JourFerie[]>([]);
-  const [capaciteMatin, setCapaciteMatin] = useState(0);
-  const [capaciteAprem, setCapaciteAprem] = useState(0);
+  // Capacite MAX D'UN TRAJET (places du vehicule moins le chauffeur). Avant :
+  // deux capacites "matin"/"apres-midi" egales a la somme des places de TOUS les
+  // vehicules de la ligne, comparees au cumul des usagers de la journee -> taux
+  // de frequentation faux.
+  const [capaciteTrajet, setCapaciteTrajet] = useState(CAPACITE_TRAJET_DEFAUT);
+  const [sensFilter, setSensFilter] = useState<Sens>('tous');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const [daysData, setDaysData] = useState<DayData[]>([]);
   const [dataGenerated, setDataGenerated] = useState(false);
-  const [activeTab, setActiveTab] = useState<'semaine' | 'samedi' | 'dimanche' | 'feries' | 'hebdo' | 'mensuel'>('semaine');
+  // Dimanches et jours feries sont traites ENSEMBLE (meme regime pour le
+  // client) : ils avaient chacun leur onglet auparavant.
+  const [activeTab, setActiveTab] = useState<'semaine' | 'samedi' | 'dimanche_feries' | 'chauffeurs' | 'hebdo' | 'mensuel'>('semaine');
   const [activePeriod, setActivePeriod] = useState<'matin' | 'soir' | 'journee'>('matin');
 
   const selectedLigne = lignes.find(l => l.id === selectedLigneId);
@@ -179,15 +253,19 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
   useEffect(() => {
     async function load() {
       const [chRes, jfRes] = await Promise.all([
-        supabase.from('chauffeurs').select('id, nom, prenom, vehicule_places, ligne_id').eq('statut', 'actif'),
+        supabase.from('chauffeurs').select('id, code, nom, prenom, vehicule_places, ligne_id').eq('statut', 'actif'),
         supabase.from('jours_feries').select('date, intitule'),
       ]);
       if (chRes.data) {
         setChauffeurs(chRes.data);
-        const lc = chRes.data.filter(c => c.ligne_id === selectedLigneId);
-        const total = lc.reduce((s, c) => s + (c.vehicule_places || 0), 0);
-        setCapaciteMatin(total);
-        setCapaciteAprem(total);
+        // Vehicule median de la ligne, chauffeur deduit (9 places -> 8 usagers).
+        const places = chRes.data
+          .filter(c => c.ligne_id === selectedLigneId)
+          .map(c => c.vehicule_places || 0)
+          .filter(p => p > 1)
+          .sort((a, b) => a - b);
+        const median = places.length > 0 ? places[Math.floor(places.length / 2)] : 0;
+        setCapaciteTrajet(median > 1 ? median - 1 : CAPACITE_TRAJET_DEFAUT);
       }
       if (jfRes.data) setJoursFeries(jfRes.data);
     }
@@ -201,7 +279,12 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
     // Cloisonnement : le rapport ne compte QUE les courses de CE client (et de la
     // ligne choisie). Sans le filtre client, deux clients partageant une ligne se
     // retrouvaient mutuellement dans leurs rapports.
-    const ligneCourses = courses.filter(c => c.ligne_id === selectedLigneId && c.client_id === clientId);
+    // Filtre supplementaire par SENS du trajet (aller / retour) : demande client
+    // pour analyser separement les deux sens de la ligne.
+    const ligneCourses = courses.filter(c =>
+      c.ligne_id === selectedLigneId
+      && c.client_id === clientId
+      && (sensFilter === 'tous' || sensCourse(c, selectedLigne) === sensFilter));
     const feriesDates = new Set(joursFeries.map(jf => jf.date));
     const feriesMap = Object.fromEntries(joursFeries.map(jf => [jf.date, jf.intitule]));
 
@@ -215,7 +298,10 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
       const matinCourses = dayCourses.filter(c => c.periode === 'matin');
       const soirCourses = dayCourses.filter(c => c.periode === 'apres_midi');
 
-      const buildTrips = (periodCourses: Course[], capacite: number): TripRow[] => {
+      // Un depart = une ligne. La capacite d'un creneau = nombre de trajets x
+      // capacite d'un vehicule : c'est ce qui rend le taux comparable d'un jour
+      // a l'autre.
+      const buildTrips = (periodCourses: Course[]): TripRow[] => {
         const byHour: Record<string, Course[]> = {};
         periodCourses.forEach(c => {
           const h = fmtHM(c.date_heure);
@@ -225,24 +311,28 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
         return Object.entries(byHour)
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([heure, trips]) => {
-            // Real passenger counts reported by the driver app; fall back to
-            // the historical estimate (40/trip) for courses without counts.
-            const usagers = trips.reduce(
-              (s, c) => s + (c.nb_passagers || c.passagers_depart || 40),
-              0
-            );
+            const usagers = trips.reduce((s, c) => s + usagersCourse(c), 0);
+            const realises = trips.filter(estRealise).length;
+            const capacite = realises * capaciteTrajet;
             const avgDuree = trips.reduce((s, c) => s + (c.duree_minutes || 0), 0) / trips.length;
             return {
               heure_depart: heure,
+              nb_trajets: trips.length,
+              nb_realises: realises,
               nbre_usagers: usagers,
+              capacite_max: capacite,
               taux_frequentation: capacite > 0 ? Math.round((usagers / capacite) * 100) : 0,
               temps_moyen: formatMinutes(avgDuree),
             };
           });
       };
 
-      const matinTrips = buildTrips(matinCourses, capaciteMatin);
-      const soirTrips = buildTrips(soirCourses, capaciteAprem);
+      const matinTrips = buildTrips(matinCourses);
+      const soirTrips = buildTrips(soirCourses);
+      const matinRealises = matinCourses.filter(estRealise).length;
+      const soirRealises = soirCourses.filter(estRealise).length;
+      const capaciteMatin = matinRealises * capaciteTrajet;
+      const capaciteAprem = soirRealises * capaciteTrajet;
 
       const matinDurees = matinCourses.map(c => c.duree_minutes || 0);
       const soirDurees = soirCourses.map(c => c.duree_minutes || 0);
@@ -263,6 +353,8 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
         ferie_intitule: feriesMap[dateStr] || '',
         matin: {
           trips: matinTrips,
+          nb_trajets: matinCourses.length,
+          nb_realises: matinRealises,
           total_usagers: matinUsagers,
           capacite_max: capaciteMatin,
           taux_frequentation: capaciteMatin > 0 ? Math.round((matinUsagers / capaciteMatin) * 100) : 0,
@@ -271,6 +363,8 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
         },
         soir: {
           trips: soirTrips,
+          nb_trajets: soirCourses.length,
+          nb_realises: soirRealises,
           total_usagers: soirUsagers,
           capacite_max: capaciteAprem,
           taux_frequentation: capaciteAprem > 0 ? Math.round((soirUsagers / capaciteAprem) * 100) : 0,
@@ -278,6 +372,8 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
           ecart_type: formatMinutes(calcEcartType(soirDurees)),
         },
         journee: {
+          nb_trajets: matinCourses.length + soirCourses.length,
+          nb_realises: matinRealises + soirRealises,
           total_usagers: matinUsagers + soirUsagers,
           capacite_max: capaciteMatin + capaciteAprem,
           taux_frequentation: (capaciteMatin + capaciteAprem) > 0 ? Math.round(((matinUsagers + soirUsagers) / (capaciteMatin + capaciteAprem)) * 100) : 0,
@@ -289,7 +385,7 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
 
     setDaysData(result);
     setDataGenerated(true);
-  }, [year, month, selectedLigneId, courses, capaciteMatin, capaciteAprem, joursFeries]);
+  }, [year, month, selectedLigneId, selectedLigne, clientId, courses, capaciteTrajet, sensFilter, joursFeries]);
 
   // Editable field updater
   const updateDayField = (dateStr: string, period: 'matin' | 'soir', field: string, tripIdx: number | null, value: number | string) => {
@@ -329,13 +425,20 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
   // Filtered views
   const weekdayData = useMemo(() => daysData.filter(d => !['samedi', 'dimanche'].includes(d.jour_semaine) && !d.is_ferie), [daysData]);
   const saturdayData = useMemo(() => daysData.filter(d => d.jour_semaine === 'samedi'), [daysData]);
-  const sundayData = useMemo(() => daysData.filter(d => d.jour_semaine === 'dimanche'), [daysData]);
-  const feriesData = useMemo(() => daysData.filter(d => d.is_ferie), [daysData]);
+  // Dimanches ET jours feries dans le meme tableau (meme regime tarifaire /
+  // meme service pour le client) : ils etaient separes en deux onglets.
+  const dimancheFeriesData = useMemo(
+    () => daysData.filter(d => d.jour_semaine === 'dimanche' || d.is_ferie),
+    [daysData],
+  );
 
   // Weekly summaries
+  // Synthese hebdomadaire calculee sur les SEULS JOURS DE SEMAINE (hors samedi,
+  // dimanche et jours feries) : demande client, le service de semaine n'est pas
+  // comparable a celui du week-end.
   const weeklySummaries = useMemo((): WeekSummary[] => {
     const weeks: Record<number, DayData[]> = {};
-    daysData.forEach(d => {
+    weekdayData.forEach(d => {
       const w = getWeekNumber(new Date(d.date));
       if (!weeks[w]) weeks[w] = [];
       weeks[w].push(d);
@@ -354,21 +457,67 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
         date_fin: sorted[sorted.length - 1].date,
         matin: {
           usagers: matinUsagers,
+          trajets: days.reduce((s, d) => s + d.matin.nb_trajets, 0),
+          capacite: matinCap,
           taux: matinCap > 0 ? Math.round((matinUsagers / matinCap) * 100) : 0,
           temps_moyen: formatMinutes(matinDurees.length > 0 ? matinDurees.reduce((s, v) => s + v, 0) / matinDurees.length : 0),
           ecart_type: formatMinutes(calcEcartType(matinDurees)),
         },
         soir: {
           usagers: soirUsagers,
+          trajets: days.reduce((s, d) => s + d.soir.nb_trajets, 0),
+          capacite: soirCap,
           taux: soirCap > 0 ? Math.round((soirUsagers / soirCap) * 100) : 0,
           temps_moyen: formatMinutes(soirDurees.length > 0 ? soirDurees.reduce((s, v) => s + v, 0) / soirDurees.length : 0),
           ecart_type: formatMinutes(calcEcartType(soirDurees)),
         },
         total_usagers: matinUsagers + soirUsagers,
+        total_trajets: days.reduce((s, d) => s + d.journee.nb_trajets, 0),
+        total_realises: days.reduce((s, d) => s + d.journee.nb_realises, 0),
         taux_global: (matinCap + soirCap) > 0 ? Math.round(((matinUsagers + soirUsagers) / (matinCap + soirCap)) * 100) : 0,
       };
     }).sort((a, b) => a.semaine - b.semaine);
-  }, [daysData]);
+  }, [weekdayData]);
+
+  // ---- Statistiques par chauffeur (demande client) -------------------------
+  // Pour chaque chauffeur sur le mois / la ligne / le sens choisis :
+  //   planifies - non effectues + realises en remplacement = effectues
+  // Une course de remplacement est creee par le planning avec la note
+  // "[Remplacement]" : c'est le seul marqueur disponible en base.
+  const chauffeurStats = useMemo(() => {
+    const prefix = `${year}-${month.toString().padStart(2, '0')}`;
+    const moisCourses = courses.filter(c =>
+      c.ligne_id === selectedLigneId
+      && c.client_id === clientId
+      && !c.is_brouillon
+      && toLocalDateStr(parseCourseDate(c.date_heure)).startsWith(prefix)
+      && (sensFilter === 'tous' || sensCourse(c, selectedLigne) === sensFilter));
+
+    const acc = new Map<string, { planifies: number; nonEffectues: number; remplacements: number; effectues: number; usagers: number }>();
+    for (const c of moisCourses) {
+      const key = c.chauffeur_id || 'non_affecte';
+      const a = acc.get(key) || { planifies: 0, nonEffectues: 0, remplacements: 0, effectues: 0, usagers: 0 };
+      const statut = c.statut_realisation || c.statut || '';
+      const estRemplacement = (c.notes || '').startsWith('[Remplacement]');
+      a.planifies += 1;
+      if (statut === 'annule' || statut === 'annulee' || statut === 'non_effectue' || statut === 'remplace') a.nonEffectues += 1;
+      if (statut === 'termine' || statut === 'terminee') {
+        a.effectues += 1;
+        a.usagers += usagersCourse(c);
+        if (estRemplacement) a.remplacements += 1;
+      }
+      acc.set(key, a);
+    }
+
+    return [...acc.entries()].map(([id, a]) => {
+      const ch = chauffeurs.find(x => x.id === id);
+      return {
+        id,
+        libelle: ch ? [ch.code, `${ch.nom} ${ch.prenom}`.trim()].filter(Boolean).join(' - ') : (id === 'non_affecte' ? 'Non affecte' : 'Chauffeur archive'),
+        ...a,
+      };
+    }).sort((a, b) => a.libelle.localeCompare(b.libelle));
+  }, [courses, chauffeurs, selectedLigneId, selectedLigne, clientId, sensFilter, year, month]);
 
   // Monthly summary
   const monthlySummary = useMemo(() => {
@@ -382,8 +531,11 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
       matin: { usagers: matinUsagers, taux: matinCap > 0 ? Math.round((matinUsagers / matinCap) * 100) : 0, temps_moyen: formatMinutes(matinDurees.length > 0 ? matinDurees.reduce((s, v) => s + v, 0) / matinDurees.length : 0), ecart_type: formatMinutes(calcEcartType(matinDurees)) },
       soir: { usagers: soirUsagers, taux: soirCap > 0 ? Math.round((soirUsagers / soirCap) * 100) : 0, temps_moyen: formatMinutes(soirDurees.length > 0 ? soirDurees.reduce((s, v) => s + v, 0) / soirDurees.length : 0), ecart_type: formatMinutes(calcEcartType(soirDurees)) },
       total_usagers: matinUsagers + soirUsagers,
+      total_trajets: daysData.reduce((s, d) => s + d.journee.nb_trajets, 0),
+      total_realises: daysData.reduce((s, d) => s + d.journee.nb_realises, 0),
+      capacite_totale: matinCap + soirCap,
       taux_global: (matinCap + soirCap) > 0 ? Math.round(((matinUsagers + soirUsagers) / (matinCap + soirCap)) * 100) : 0,
-      jours_travailles: daysData.filter(d => d.journee.total_usagers > 0).length,
+      jours_travailles: daysData.filter(d => d.journee.nb_realises > 0).length,
       jours_feries: daysData.filter(d => d.is_ferie).length,
     };
   }, [daysData]);
@@ -400,7 +552,7 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
       data_journee: daysData.map(d => ({ date: d.date, label: d.label, jour_semaine: d.jour_semaine, is_ferie: d.is_ferie, ferie_intitule: d.ferie_intitule, ...d.journee })),
       data_trajets_matin: daysData.flatMap(d => d.matin.trips.map(t => ({ date: d.date, ...t }))),
       data_trajets_aprem: daysData.flatMap(d => d.soir.trips.map(t => ({ date: d.date, ...t }))),
-      metadata: { capacite_matin: capaciteMatin, capacite_aprem: capaciteAprem, ligne_code: selectedLigne?.code, ligne_depart: selectedLigne?.depart, ligne_arrivee: selectedLigne?.arrivee, weekly: weeklySummaries, monthly: monthlySummary },
+      metadata: { capacite_trajet: capaciteTrajet, sens: sensFilter, ligne_code: selectedLigne?.code, ligne_depart: selectedLigne?.depart, ligne_arrivee: selectedLigne?.arrivee, weekly: weeklySummaries, monthly: monthlySummary },
       user_id: user.id,
     };
   }
@@ -441,7 +593,8 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
                 <th className="px-2 py-2 text-left font-semibold text-gray-600 min-w-[140px]">Jour</th>
-                <th className="px-2 py-2 text-center font-semibold text-gray-600">H. depart</th>
+                <th className="px-2 py-2 text-center font-semibold text-gray-600" title="Nombre de trajets prevus au planning sur la periode">Trajets</th>
+                <th className="px-2 py-2 text-center font-semibold text-gray-600" title="Trajets reellement effectues : eux seuls entrent dans le taux de frequentation">Realises</th>
                 <th className="px-2 py-2 text-center font-semibold text-gray-600">Usagers</th>
                 <th className="px-2 py-2 text-center font-semibold text-gray-600">Taux freq.</th>
                 <th className="px-2 py-2 text-center font-semibold text-gray-600">Temps moy.</th>
@@ -471,9 +624,17 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
                         )}
                       </div>
                     </td>
-                    <td className="px-2 py-1.5 text-center text-gray-600">
-                      {trips.length > 0 ? trips[0].heure_depart : '--:--'}
-                      {trips.length > 1 && <span className="text-[9px] text-gray-400 ml-0.5">+{trips.length - 1}</span>}
+                    {/* Avant : l'heure du premier depart, que personne ne savait
+                        interpreter. On affiche le NOMBRE DE TRAJETS (les horaires
+                        restent lisibles en infobulle). */}
+                    <td
+                      className="px-2 py-1.5 text-center font-medium text-gray-700"
+                      title={trips.length > 0 ? `Departs : ${trips.map(t => `${t.heure_depart} (${t.nb_trajets})`).join(', ')}` : undefined}
+                    >
+                      {data.nb_trajets}
+                    </td>
+                    <td className={`px-2 py-1.5 text-center ${data.nb_realises < data.nb_trajets ? 'text-amber-600 font-medium' : 'text-gray-600'}`}>
+                      {data.nb_realises}
                     </td>
                     <td className="px-2 py-1.5 text-center">
                       <input
@@ -488,8 +649,14 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
                         className={`w-14 px-1 py-0.5 rounded text-center font-medium ${activePeriod === 'journee' ? 'bg-gray-50 text-gray-500 border-gray-200' : 'border-blue-200 text-blue-700 bg-blue-50/50 focus:ring-1 focus:ring-blue-400'} border outline-none`}
                       />
                     </td>
-                    <td className={`px-2 py-1.5 text-center font-bold ${data.taux_frequentation >= 95 ? 'text-red-700' : data.taux_frequentation >= 80 ? 'text-orange-700' : 'text-gray-700'}`}>
+                    <td
+                      className={`px-2 py-1.5 text-center font-bold ${data.taux_frequentation >= 95 ? 'text-red-700' : data.taux_frequentation >= 80 ? 'text-orange-700' : 'text-gray-700'}`}
+                      title={`${data.total_usagers} usagers / ${data.capacite_max} places (${data.nb_realises} trajets realises x ${capaciteTrajet})`}
+                    >
                       {data.taux_frequentation}%
+                      <span className="block text-[9px] font-normal text-gray-400">
+                        {data.total_usagers}/{data.capacite_max}
+                      </span>
                     </td>
                     <td className="px-2 py-1.5 text-center">
                       <input
@@ -533,15 +700,77 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
     );
   }
 
+  function renderChauffeurTable() {
+    const tot = chauffeurStats.reduce((s, c) => ({
+      planifies: s.planifies + c.planifies,
+      nonEffectues: s.nonEffectues + c.nonEffectues,
+      remplacements: s.remplacements + c.remplacements,
+      effectues: s.effectues + c.effectues,
+      usagers: s.usagers + c.usagers,
+    }), { planifies: 0, nonEffectues: 0, remplacements: 0, effectues: 0, usagers: 0 });
+    if (chauffeurStats.length === 0) {
+      return <p className="text-sm text-gray-400 italic p-4">Aucune course sur ce mois pour cette ligne.</p>;
+    }
+    return (
+      <div className="mb-6">
+        <h4 className="text-xs font-bold text-red-700 uppercase mb-2">
+          Detail par chauffeur - {MONTHS_FR[month - 1]} {year}
+        </h4>
+        <div className="overflow-x-auto border border-gray-200 rounded-lg">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-3 py-2 text-left font-semibold text-gray-600">Chauffeur</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-600" title="Toutes les courses qui lui etaient affectees">Trajets planifies</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-600" title="Annules, non effectues ou repris par un remplacant">Non effectues</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-600" title="Trajets qu'il a assures a la place d'un autre chauffeur">Dont remplacements</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-700 bg-gray-100">Trajets effectues</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-600">Usagers</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {chauffeurStats.map(c => (
+                <tr key={c.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-3 py-2 font-medium text-gray-800">{c.libelle}</td>
+                  <td className="px-3 py-2 text-center text-gray-700">{c.planifies}</td>
+                  <td className={`px-3 py-2 text-center ${c.nonEffectues > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}`}>{c.nonEffectues}</td>
+                  <td className={`px-3 py-2 text-center ${c.remplacements > 0 ? 'text-amber-600 font-medium' : 'text-gray-400'}`}>{c.remplacements}</td>
+                  <td className="px-3 py-2 text-center font-bold text-gray-900 bg-gray-50">{c.effectues}</td>
+                  <td className="px-3 py-2 text-center text-gray-700">{c.usagers}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-800">
+                <td className="px-3 py-2">TOTAL ({chauffeurStats.length} chauffeurs)</td>
+                <td className="px-3 py-2 text-center">{tot.planifies}</td>
+                <td className="px-3 py-2 text-center">{tot.nonEffectues}</td>
+                <td className="px-3 py-2 text-center">{tot.remplacements}</td>
+                <td className="px-3 py-2 text-center">{tot.effectues}</td>
+                <td className="px-3 py-2 text-center">{tot.usagers}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
   function renderWeeklyTable() {
     return (
       <div className="mb-6">
-        <h4 className="text-xs font-bold text-red-700 uppercase mb-2">Synthese hebdomadaire</h4>
+        <h4 className="text-xs font-bold text-red-700 uppercase mb-2">
+          Synthese hebdomadaire
+          <span className="ml-2 font-normal normal-case text-[10px] text-gray-500">
+            jours de semaine uniquement (hors samedi, dimanche et jours feries)
+          </span>
+        </h4>
         <div className="overflow-x-auto border border-gray-200 rounded-lg">
           <table className="w-full text-[11px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
                 <th className="px-3 py-2 text-left font-semibold text-gray-600">Semaine</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-600" title="Trajets realises / planifies">Trajets</th>
                 <th className="px-3 py-2 text-center font-semibold text-gray-600">Usagers Matin</th>
                 <th className="px-3 py-2 text-center font-semibold text-gray-600">Taux Matin</th>
                 <th className="px-3 py-2 text-center font-semibold text-gray-600">Temps moy. Matin</th>
@@ -558,6 +787,9 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
               {weeklySummaries.map(w => (
                 <tr key={w.semaine} className="hover:bg-gray-50 transition-colors">
                   <td className="px-3 py-2 font-medium text-gray-800">S{w.semaine}</td>
+                  <td className="px-3 py-2 text-center text-gray-500" title={`${w.total_realises} realises sur ${w.total_trajets} planifies`}>
+                    {w.total_realises}<span className="text-gray-300">/{w.total_trajets}</span>
+                  </td>
                   <td className="px-3 py-2 text-center text-gray-700">{w.matin.usagers}</td>
                   <td className={`px-3 py-2 text-center font-bold ${w.matin.taux >= 95 ? 'text-red-700' : 'text-gray-700'}`}>{w.matin.taux}%</td>
                   <td className="px-3 py-2 text-center text-gray-600">{w.matin.temps_moyen}</td>
@@ -567,7 +799,10 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
                   <td className="px-3 py-2 text-center text-gray-600">{w.soir.temps_moyen}</td>
                   <td className="px-3 py-2 text-center text-gray-400">{w.soir.ecart_type}</td>
                   <td className="px-3 py-2 text-center font-bold text-gray-900 bg-gray-50">{w.total_usagers}</td>
-                  <td className={`px-3 py-2 text-center font-bold bg-gray-50 ${w.taux_global >= 90 ? 'text-red-700' : 'text-gray-700'}`}>{w.taux_global}%</td>
+                  <td
+                    className={`px-3 py-2 text-center font-bold bg-gray-50 ${w.taux_global >= 90 ? 'text-red-700' : 'text-gray-700'}`}
+                    title={`${w.total_usagers} usagers / ${w.matin.capacite + w.soir.capacite} places`}
+                  >{w.taux_global}%</td>
                 </tr>
               ))}
             </tbody>
@@ -604,7 +839,9 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
             <p className="text-[10px] text-gray-400 uppercase font-semibold mb-2">Total Mensuel</p>
             <p className="text-xl font-bold">{monthlySummary.total_usagers} <span className="text-xs font-normal text-gray-400">usagers</span></p>
             <div className="mt-2 space-y-1 text-[11px]">
-              <div className="flex justify-between"><span className="text-gray-400">Taux global</span><span className="font-bold text-white">{monthlySummary.taux_global}%</span></div>
+              <div className="flex justify-between" title="Trajets realises sur trajets planifies"><span className="text-gray-400">Trajets realises</span><span className="text-white">{monthlySummary.total_realises} / {monthlySummary.total_trajets}</span></div>
+              <div className="flex justify-between"><span className="text-gray-400">Capacite totale</span><span className="text-white">{monthlySummary.capacite_totale}</span></div>
+              <div className="flex justify-between"><span className="text-gray-400">Taux global</span><span className="font-bold text-white" title={`${monthlySummary.total_usagers} usagers / ${monthlySummary.capacite_totale} places`}>{monthlySummary.taux_global}%</span></div>
               <div className="flex justify-between"><span className="text-gray-400">Jours travailles</span><span className="text-white">{monthlySummary.jours_travailles}</span></div>
               <div className="flex justify-between"><span className="text-gray-400">Jours feries</span><span className="text-yellow-400">{monthlySummary.jours_feries}</span></div>
             </div>
@@ -683,22 +920,32 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5"><Users className="w-3 h-3 inline mr-1" />Capacite Matin</label>
-                    <input type="number" value={capaciteMatin} onChange={(e) => setCapaciteMatin(parseInt(e.target.value) || 0)} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
-                    <p className="text-[10px] text-gray-400 mt-1">Calculee: {ligneChauffeurs.reduce((s, c) => s + (c.vehicule_places || 0), 0)} places</p>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5"><Users className="w-3 h-3 inline mr-1" />Capacite max par trajet</label>
+                    <input type="number" min={1} value={capaciteTrajet} onChange={(e) => setCapaciteTrajet(parseInt(e.target.value) || CAPACITE_TRAJET_DEFAUT)} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      Places du vehicule moins le chauffeur (9 places = 8 usagers).
+                      La capacite d'une periode = nombre de trajets x cette valeur.
+                    </p>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5"><Users className="w-3 h-3 inline mr-1" />Capacite Apres-midi</label>
-                    <input type="number" value={capaciteAprem} onChange={(e) => setCapaciteAprem(parseInt(e.target.value) || 0)} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
-                    <p className="text-[10px] text-gray-400 mt-1">Ajustable si rotation differente l'AM</p>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Sens du trajet</label>
+                    <select value={sensFilter} onChange={(e) => setSensFilter(e.target.value as Sens)} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none">
+                      <option value="tous">Les deux sens</option>
+                      <option value="aller">Aller ({selectedLigne?.depart} vers {selectedLigne?.arrivee})</option>
+                      <option value="retour">Retour ({selectedLigne?.arrivee} vers {selectedLigne?.depart})</option>
+                    </select>
+                    <p className="text-[10px] text-gray-400 mt-1">Filtre applique a tout le rapport</p>
                   </div>
                 </div>
               </div>
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                 <p className="text-sm text-blue-800">
-                  Donnees generees par jour: <b>heure de depart</b>, <b>nbre usagers</b>, <b>taux frequentation</b>, <b>temps moyen</b>, <b>ecart-type</b>.
-                  Vue par jour type (semaine/samedi/dimanche), par semaine, et mensuel.
-                  Jours feries indiques. Chiffres <span className="text-blue-700 font-bold">bleus</span> = modifiables.
+                  Donnees generees par jour: <b>nombre de trajets</b>, <b>nbre usagers</b> (le plus grand des
+                  comptages montees / descentes), <b>capacite max</b>, <b>taux de frequentation</b>
+                  (usagers / capacite), <b>temps moyen</b>, <b>ecart-type</b>.
+                  Vue par jour type (semaine / samedi / dimanche et feries), par semaine
+                  (jours de semaine uniquement) et mensuel.
+                  Chiffres <span className="text-blue-700 font-bold">bleus</span> = modifiables.
                 </p>
               </div>
               <div className="flex justify-end">
@@ -723,15 +970,15 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
                 </div>
                 {/* Tab navigation */}
                 <div className="flex flex-wrap gap-1 mb-3">
-                  {([['semaine', 'Jours semaine'], ['samedi', 'Samedis'], ['dimanche', 'Dimanches'], ['feries', 'Jours feries'], ['hebdo', 'Par semaine'], ['mensuel', 'Mensuel']] as [string, string][]).map(([key, label]) => (
+                  {([['semaine', 'Jours semaine'], ['samedi', 'Samedis'], ['dimanche_feries', 'Dimanches et feries'], ['chauffeurs', 'Par chauffeur'], ['hebdo', 'Par semaine'], ['mensuel', 'Mensuel']] as [string, string][]).map(([key, label]) => (
                     <button key={key} onClick={() => setActiveTab(key as typeof activeTab)} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeTab === key ? 'bg-amber-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                       {label}
-                      {key === 'feries' && feriesData.length > 0 && <span className="ml-1 text-[9px]">({feriesData.length})</span>}
+                      {key === 'dimanche_feries' && dimancheFeriesData.length > 0 && <span className="ml-1 text-[9px]">({dimancheFeriesData.length})</span>}
                     </button>
                   ))}
                 </div>
                 {/* Period toggle */}
-                {!['hebdo', 'mensuel'].includes(activeTab) && (
+                {!['hebdo', 'mensuel', 'chauffeurs'].includes(activeTab) && (
                   <div className="flex gap-1 mb-3">
                     {([['matin', 'Matin'], ['soir', 'Apres-midi'], ['journee', 'Journee']] as [typeof activePeriod, string][]).map(([key, label]) => (
                       <button key={key} onClick={() => setActivePeriod(key)} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activePeriod === key ? 'bg-teal-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
@@ -745,8 +992,10 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
               {/* Content based on tab */}
               {activeTab === 'semaine' && renderDayTable(weekdayData, `Jours de semaine - ${activePeriod === 'matin' ? 'Matin' : activePeriod === 'soir' ? 'Apres-midi' : 'Journee'}`)}
               {activeTab === 'samedi' && renderDayTable(saturdayData, `Samedis - ${activePeriod === 'matin' ? 'Matin' : activePeriod === 'soir' ? 'Apres-midi' : 'Journee'}`)}
-              {activeTab === 'dimanche' && renderDayTable(sundayData, `Dimanches - ${activePeriod === 'matin' ? 'Matin' : activePeriod === 'soir' ? 'Apres-midi' : 'Journee'}`)}
-              {activeTab === 'feries' && (feriesData.length > 0 ? renderDayTable(feriesData, 'Jours feries') : <p className="text-sm text-gray-400 italic p-4">Aucun jour ferie sur ce mois</p>)}
+              {activeTab === 'dimanche_feries' && (dimancheFeriesData.length > 0
+                ? renderDayTable(dimancheFeriesData, `Dimanches et jours feries - ${activePeriod === 'matin' ? 'Matin' : activePeriod === 'soir' ? 'Apres-midi' : 'Journee'}`)
+                : <p className="text-sm text-gray-400 italic p-4">Aucun dimanche ni jour ferie sur ce mois</p>)}
+              {activeTab === 'chauffeurs' && renderChauffeurTable()}
               {activeTab === 'hebdo' && renderWeeklyTable()}
               {activeTab === 'mensuel' && renderMonthlyCard()}
 
@@ -796,6 +1045,7 @@ export function ReportWizard({ user, clientId, clientNom, lignes, courses, onClo
               </div>
 
               {renderMonthlyCard()}
+              {renderChauffeurTable()}
               {renderWeeklyTable()}
               {renderDayTable(weekdayData, 'Statistiques journalieres - Semaine (Matin)')}
 

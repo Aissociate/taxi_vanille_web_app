@@ -8,7 +8,7 @@ import { supabase } from '../lib/supabase';
 import {
   COLONNES, type ColDef, type ChampId, type StatRow, type LigneLite, type SlotConso,
   loadDay, loadRange, consolider, setCell, addManualRow, deleteRow, resetDay,
-  moyennePassagers, tauxFrequentation, toInt,
+  usagers, tauxFrequentation, tauxFrequentationMoyen, toInt,
 } from '../lib/statLigne';
 import { downloadSpreadsheet, type SheetData, type CellValue } from '../lib/spreadsheetExport';
 import { mDateStr, mNoon, mAddDaysStr, mMondayStr, fmtDateLong, fmtMonthYear, mParts } from '../lib/mayotte';
@@ -49,7 +49,7 @@ function weekDays(anchor: string): string[] {
 // En-tetes d'export (colonnes de la feuille + valeurs calculees).
 const EXPORT_HEADERS = [
   ...COLONNES.map((c) => c.label),
-  'Nbre moyen passagers',
+  'Nbre usagers',
   'Taux frequentation %',
 ];
 
@@ -69,7 +69,7 @@ function rowToExport(values: StatRow['values']): CellValue[] {
     values.heure_arrivee,
     values.commentaires,
     values.temps_aller ? toInt(values.temps_aller) : '',
-    moyennePassagers(values),
+    usagers(values),
     toInt(values.capacite),
     taux,
   ];
@@ -165,6 +165,39 @@ export function FacturationLignePage({ user }: Props) {
     () => (view === 'jour' ? [] : consolider(perDayFiltered, jours)),
     [view, perDayFiltered, jours],
   );
+
+  // ---- Temps moyen par chauffeur sur la selection --------------------------
+  // Sert a reperer les anomalies : un chauffeur nettement au-dessus (ou en
+  // dessous) du temps moyen de la ligne sur la meme periode.
+  const tempsParChauffeur = useMemo(() => {
+    const rowsSel: StatRow[] = view === 'jour'
+      ? visibleRows
+      : [...perDayFiltered.values()].flat();
+    const acc = new Map<string, { sum: number; n: number; min: number; max: number }>();
+    let globalSum = 0, globalN = 0;
+    for (const r of rowsSel) {
+      const t = toInt(r.values.temps_aller);
+      const nom = r.values.chauffeur.trim();
+      if (t <= 0 || !nom) continue;
+      const a = acc.get(nom) || { sum: 0, n: 0, min: t, max: t };
+      a.sum += t; a.n += 1;
+      a.min = Math.min(a.min, t); a.max = Math.max(a.max, t);
+      acc.set(nom, a);
+      globalSum += t; globalN += 1;
+    }
+    const moyenneLigne = globalN > 0 ? globalSum / globalN : 0;
+    const lignesTab = [...acc.entries()]
+      .map(([chauffeur, a]) => ({
+        chauffeur,
+        nb: a.n,
+        moyenne: a.sum / a.n,
+        min: a.min,
+        max: a.max,
+        ecart: moyenneLigne > 0 ? a.sum / a.n - moyenneLigne : 0,
+      }))
+      .sort((x, y) => y.moyenne - x.moyenne);
+    return { lignes: lignesTab, moyenneLigne, nbTrajets: globalN };
+  }, [view, visibleRows, perDayFiltered]);
 
   // ---- Edition (vue jour) --------------------------------------------------
 
@@ -263,14 +296,16 @@ export function FacturationLignePage({ user }: Props) {
   function syntheseSheet(name: string, slots: SlotConso[], daysCols: string[] | null): SheetData {
     const header: CellValue[] = ['Arret', 'Heure theo'];
     if (daysCols) header.push(...daysCols.map(ddmm));
-    header.push('Nb departs', 'Total montees', 'Total descentes', 'Taux moyen %', 'Temps moyen (min)', 'Non effectues', 'Retards', 'Avances');
+    header.push('Nb departs', 'Total montees', 'Total descentes', 'Total usagers', 'Capacite max', 'Taux moyen %', 'Temps moyen (min)', 'Non effectues', 'Retards', 'Avances');
     const rowsX = slots.map((s) => {
       const line: CellValue[] = [s.arret, s.heure_theo];
-      if (daysCols) line.push(...daysCols.map((j) => s.parJour.get(j)?.montees ?? 0));
+      if (daysCols) line.push(...daysCols.map((j) => s.parJour.get(j)?.usagers ?? 0));
       line.push(
         s.nbDeparts,
         s.totMontees,
         s.totDescentes,
+        s.totUsagers,
+        s.totCapacite,
         Math.round(s.tauxMoyen * 1000) / 10,
         Math.round(s.tempsMoyen * 10) / 10,
         s.nbNonEffectue,
@@ -311,18 +346,24 @@ export function FacturationLignePage({ user }: Props) {
 
   // ---- Totaux vue jour -----------------------------------------------------
 
+  // Taux moyen = SOMME des usagers / SOMME des capacites max des trajets
+  // affiches. Avant : moyenne des taux trajet par trajet (cumul de ratios),
+  // donc un taux faux des que les capacites variaient d'un trajet a l'autre.
   const totaux = useMemo(() => {
-    let montees = 0, descentes = 0, nonEff = 0, retard = 0, avance = 0, tauxSum = 0, tauxN = 0;
+    let montees = 0, descentes = 0, nonEff = 0, retard = 0, avance = 0, totUsagers = 0, totCapacite = 0;
     for (const r of visibleRows) {
       montees += toInt(r.values.montees);
       descentes += toInt(r.values.descentes);
       if (r.values.non_effectue === '1') nonEff += 1;
       if (r.values.retard === '1') retard += 1;
       if (r.values.avance === '1') avance += 1;
-      tauxSum += tauxFrequentation(r.values);
-      tauxN += 1;
+      totUsagers += usagers(r.values);
+      totCapacite += toInt(r.values.capacite);
     }
-    return { montees, descentes, nonEff, retard, avance, tauxMoyen: tauxN > 0 ? tauxSum / tauxN : 0, nb: visibleRows.length };
+    return {
+      montees, descentes, nonEff, retard, avance, totUsagers, totCapacite,
+      tauxMoyen: tauxFrequentationMoyen(visibleRows), nb: visibleRows.length,
+    };
   }, [visibleRows]);
 
   const nbModifs = useMemo(() => rows.reduce((n, r) => n + (r.manual ? 1 : r.overridden.size), 0), [rows]);
@@ -424,6 +465,72 @@ export function FacturationLignePage({ user }: Props) {
       ) : (
         <ConsoTable slots={conso} jours={view === 'semaine' ? jours : null} />
       )}
+
+      {!loading && <TempsChauffeurPanel data={tempsParChauffeur} />}
+    </div>
+  );
+}
+
+// ==== Temps moyen par chauffeur ============================================
+
+interface TempsChauffeurData {
+  lignes: { chauffeur: string; nb: number; moyenne: number; min: number; max: number; ecart: number }[];
+  moyenneLigne: number;
+  nbTrajets: number;
+}
+
+function TempsChauffeurPanel({ data }: { data: TempsChauffeurData }) {
+  const [open, setOpen] = useState(true);
+  if (data.lignes.length === 0) return null;
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+          <UserRound className="w-4 h-4 text-gray-400" />
+          Temps moyen par chauffeur sur la selection
+          <span className="text-xs font-normal text-gray-500">
+            ({data.nbTrajets} trajet{data.nbTrajets > 1 ? 's' : ''} chronometre{data.nbTrajets > 1 ? 's' : ''},
+            moyenne ligne {data.moyenneLigne.toFixed(0)} min)
+          </span>
+        </span>
+        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="overflow-x-auto border-t border-gray-100">
+          <table className="text-xs w-full">
+            <thead>
+              <tr className="bg-gray-50 text-gray-500 uppercase">
+                <th className="px-3 py-2 text-left font-semibold">Chauffeur</th>
+                <th className="px-2 py-2 text-center font-semibold">Trajets</th>
+                <th className="px-2 py-2 text-center font-semibold">Temps moyen</th>
+                <th className="px-2 py-2 text-center font-semibold">Mini</th>
+                <th className="px-2 py-2 text-center font-semibold">Maxi</th>
+                <th className="px-2 py-2 text-center font-semibold" title="Ecart avec le temps moyen de la ligne sur la meme selection">Ecart / ligne</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.lignes.map((l) => {
+                const anomalie = Math.abs(l.ecart) >= 10;
+                return (
+                  <tr key={l.chauffeur} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <td className="px-3 py-1.5 font-medium text-gray-700">{l.chauffeur}</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-gray-600">{l.nb}</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums font-medium">{l.moyenne.toFixed(0)} min</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-gray-500">{l.min}</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-gray-500">{l.max}</td>
+                    <td className={`px-2 py-1.5 text-center tabular-nums font-medium ${anomalie ? (l.ecart > 0 ? 'text-red-600' : 'text-blue-600') : 'text-gray-400'}`}>
+                      {l.ecart > 0 ? '+' : ''}{l.ecart.toFixed(0)} min
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -432,7 +539,7 @@ export function FacturationLignePage({ user }: Props) {
 
 interface DayTableProps {
   rows: StatRow[];
-  totaux: { montees: number; descentes: number; nonEff: number; retard: number; avance: number; tauxMoyen: number; nb: number };
+  totaux: { montees: number; descentes: number; nonEff: number; retard: number; avance: number; totUsagers: number; totCapacite: number; tauxMoyen: number; nb: number };
   nbModifs: number;
   saving: boolean;
   sortMode: SortMode;
@@ -483,7 +590,7 @@ function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCe
               {COLONNES.map((c) => (
                 <th key={c.id} className="px-2 py-2 text-left font-semibold text-gray-500 uppercase tracking-tight" style={{ minWidth: c.width }}>{c.label}</th>
               ))}
-              <th className="px-2 py-2 text-center font-semibold text-gray-500 uppercase" style={{ minWidth: 64 }}>Moy.</th>
+              <th className="px-2 py-2 text-center font-semibold text-gray-500 uppercase" style={{ minWidth: 64 }} title="Usagers du trajet = le plus grand des deux compteurs montees / descentes">Usagers</th>
               <th className="px-2 py-2 text-center font-semibold text-gray-500 uppercase" style={{ minWidth: 70 }}>Taux</th>
               <th className="px-2 py-2 w-10" />
             </tr>
@@ -504,7 +611,7 @@ function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCe
                     />
                   </td>
                 ))}
-                <td className="px-2 py-1 text-center text-gray-500 tabular-nums">{moyennePassagers(row.values)}</td>
+                <td className="px-2 py-1 text-center text-gray-500 tabular-nums">{usagers(row.values)}</td>
                 <td className="px-2 py-1 text-center font-medium text-gray-700 tabular-nums">{(tauxFrequentation(row.values) * 100).toFixed(0)}%</td>
                 <td className="px-1 py-1 text-center">
                   <button onClick={() => onDeleteRow(row)} title={row.manual ? 'Supprimer' : 'Masquer'} className="p-1 text-gray-300 hover:text-red-600 rounded transition-colors">
@@ -527,7 +634,7 @@ function DayTable({ rows, totaux, nbModifs, saving, sortMode, onSortChange, onCe
                 <td className="px-2 py-2 text-center tabular-nums">{totaux.montees}</td>
                 <td className="px-2 py-2 text-center tabular-nums">{totaux.descentes}</td>
                 <td colSpan={4} />
-                <td />
+                <td className="px-2 py-2 text-center tabular-nums" title={`${totaux.totUsagers} usagers / ${totaux.totCapacite} places`}>{totaux.totUsagers}</td>
                 <td className="px-2 py-2 text-center tabular-nums">{(totaux.tauxMoyen * 100).toFixed(0)}%</td>
                 <td />
               </tr>
@@ -588,11 +695,13 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
         nbDeparts: acc.nbDeparts + s.nbDeparts,
         totMontees: acc.totMontees + s.totMontees,
         totDescentes: acc.totDescentes + s.totDescentes,
+        totUsagers: acc.totUsagers + s.totUsagers,
+        totCapacite: acc.totCapacite + s.totCapacite,
         nonEff: acc.nonEff + s.nbNonEffectue,
         retard: acc.retard + s.nbRetard,
         avance: acc.avance + s.nbAvance,
       }),
-      { nbDeparts: 0, totMontees: 0, totDescentes: 0, nonEff: 0, retard: 0, avance: 0 },
+      { nbDeparts: 0, totMontees: 0, totDescentes: 0, totUsagers: 0, totCapacite: 0, nonEff: 0, retard: 0, avance: 0 },
     );
   }, [slots]);
 
@@ -611,7 +720,9 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
             <th className="px-2 py-2 text-center font-semibold">Nb dep.</th>
             <th className="px-2 py-2 text-center font-semibold">Tot. montees</th>
             <th className="px-2 py-2 text-center font-semibold">Tot. descentes</th>
-            <th className="px-2 py-2 text-center font-semibold">Taux moy.</th>
+            <th className="px-2 py-2 text-center font-semibold" title="Somme des usagers : max(montees, descentes) de chaque trajet">Tot. usagers</th>
+            <th className="px-2 py-2 text-center font-semibold" title="Somme des capacites max (places du vehicule moins le chauffeur)">Cap. max</th>
+            <th className="px-2 py-2 text-center font-semibold" title="Total usagers / total capacite max">Taux moy.</th>
             <th className="px-2 py-2 text-center font-semibold">Temps moy.</th>
             <th className="px-2 py-2 text-center font-semibold">Non eff.</th>
             <th className="px-2 py-2 text-center font-semibold">Retards</th>
@@ -625,11 +736,13 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
               <td className="px-3 py-1.5 text-gray-600 tabular-nums">{s.heure_theo}</td>
               {jours && jours.map((j) => {
                 const c = s.parJour.get(j);
-                return <td key={j} className="px-2 py-1.5 text-center tabular-nums text-gray-600">{c ? c.montees : ''}</td>;
+                return <td key={j} className="px-2 py-1.5 text-center tabular-nums text-gray-600">{c ? c.usagers : ''}</td>;
               })}
               <td className="px-2 py-1.5 text-center tabular-nums">{s.nbDeparts}</td>
               <td className="px-2 py-1.5 text-center tabular-nums font-medium">{s.totMontees}</td>
               <td className="px-2 py-1.5 text-center tabular-nums">{s.totDescentes}</td>
+              <td className="px-2 py-1.5 text-center tabular-nums font-medium">{s.totUsagers}</td>
+              <td className="px-2 py-1.5 text-center tabular-nums text-gray-500">{s.totCapacite}</td>
               <td className="px-2 py-1.5 text-center tabular-nums">{(s.tauxMoyen * 100).toFixed(0)}%</td>
               <td className="px-2 py-1.5 text-center tabular-nums">{s.tempsMoyen.toFixed(0)}</td>
               <td className="px-2 py-1.5 text-center tabular-nums">{s.nbNonEffectue || ''}</td>
@@ -644,7 +757,11 @@ function ConsoTable({ slots, jours }: { slots: SlotConso[]; jours: string[] | nu
             <td className="px-2 py-2 text-center tabular-nums">{totBas.nbDeparts}</td>
             <td className="px-2 py-2 text-center tabular-nums">{totBas.totMontees}</td>
             <td className="px-2 py-2 text-center tabular-nums">{totBas.totDescentes}</td>
-            <td />
+            <td className="px-2 py-2 text-center tabular-nums">{totBas.totUsagers}</td>
+            <td className="px-2 py-2 text-center tabular-nums">{totBas.totCapacite}</td>
+            <td className="px-2 py-2 text-center tabular-nums">
+              {totBas.totCapacite > 0 ? Math.round((totBas.totUsagers / totBas.totCapacite) * 100) + '%' : ''}
+            </td>
             <td />
             <td className="px-2 py-2 text-center tabular-nums">{totBas.nonEff}</td>
             <td className="px-2 py-2 text-center tabular-nums">{totBas.retard}</td>

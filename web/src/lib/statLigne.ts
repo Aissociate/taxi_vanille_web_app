@@ -97,15 +97,37 @@ function emptyCells(): Cellules {
 
 // ---- Valeurs derivees (non stockees) -------------------------------------
 
-/** Passagers moyens d'un depart = montees (un seul trajet). */
-export function moyennePassagers(v: Cellules): number {
-  return toInt(v.montees);
+/**
+ * Nombre d'usagers d'un depart = MAX(montees, descentes) — regle metier :
+ * un usager peut monter sans etre compte a la descente (et inversement), le
+ * plus grand des deux compteurs est le plus proche de la realite.
+ * Avant : seules les montees etaient comptees.
+ */
+export function usagers(v: Cellules): number {
+  return Math.max(toInt(v.montees), toInt(v.descentes));
 }
 
-/** Taux de frequentation = montees / capacite (0..1). */
+/** Capacite d'un trajet (places du vehicule, chauffeur exclu). */
+export function capaciteTrajet(v: Cellules): number {
+  return toInt(v.capacite);
+}
+
+/** Taux de frequentation d'un trajet = usagers / capacite (0..1). */
 export function tauxFrequentation(v: Cellules): number {
-  const cap = toInt(v.capacite);
-  return cap > 0 ? toInt(v.montees) / cap : 0;
+  const cap = capaciteTrajet(v);
+  return cap > 0 ? usagers(v) / cap : 0;
+}
+
+/**
+ * Taux de frequentation MOYEN d'un ensemble de trajets =
+ * somme des usagers / somme des capacites max.
+ * Ce n'est PAS la moyenne des taux ligne a ligne (qui donnait un chiffre faux
+ * des que les capacites differaient d'un trajet a l'autre).
+ */
+export function tauxFrequentationMoyen(rows: { values: Cellules }[]): number {
+  let u = 0, cap = 0;
+  for (const r of rows) { u += usagers(r.values); cap += capaciteTrajet(r.values); }
+  return cap > 0 ? u / cap : 0;
 }
 
 export function toInt(s: string): number {
@@ -191,8 +213,11 @@ function courseToBase(c: CourseRaw): Cellules {
   cells.descentes = String(c.passagers_arrivee ?? 0);
   cells.commentaires = c.notes || '';
   cells.temps_aller = c.duree_minutes != null ? String(c.duree_minutes) : '';
+  // Capacite = places du vehicule MOINS le chauffeur (un 9 places transporte
+  // 8 usagers). Avant : `vehicule_places` brut -> taux de frequentation
+  // sous-evalue d'un neuvieme.
   const places = c.chauffeurs?.vehicule_places ?? 0;
-  cells.capacite = places > 0 ? String(places) : DEFAULT_CAPACITE;
+  cells.capacite = places > 1 ? String(places - 1) : DEFAULT_CAPACITE;
   // Trajet reellement effectue : on renseigne l'heure reelle de depart / arrivee
   // depuis l'execution du chauffeur (course_executions). Ainsi un trajet effectue
   // se distingue d'un trajet seulement planifie (avant : colonnes vides -> il
@@ -461,10 +486,14 @@ export interface SlotConso {
   arret: string;
   heure_theo: string;
   sortKey: number;
-  parJour: Map<string, { montees: number; taux: number; temps: number; present: boolean }>;
+  parJour: Map<string, { montees: number; usagers: number; taux: number; temps: number; present: boolean }>;
   nbDeparts: number;
   totMontees: number;
   totDescentes: number;
+  /** Somme des usagers = MAX(montees, descentes) de chaque trajet. */
+  totUsagers: number;
+  /** Somme des capacites max de chaque trajet du creneau. */
+  totCapacite: number;
   nbNonEffectue: number;
   nbRetard: number;
   nbAvance: number;
@@ -476,7 +505,9 @@ export interface SlotConso {
 export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): SlotConso[] {
   const slots = new Map<string, SlotConso>();
   const tempsAcc = new Map<string, { sum: number; n: number }>();
-  const tauxAcc = new Map<string, { sum: number; n: number }>();
+  // Taux consolide = somme des usagers / somme des capacites (et non moyenne
+  // des taux de chaque jour, qui cumulait des ratios non comparables).
+  const tauxAcc = new Map<string, { usagers: number; capacite: number }>();
 
   for (const j of jours) {
     const rows = perDay.get(j) || [];
@@ -492,6 +523,8 @@ export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): Slo
           nbDeparts: 0,
           totMontees: 0,
           totDescentes: 0,
+          totUsagers: 0,
+          totCapacite: 0,
           nbNonEffectue: 0,
           nbRetard: 0,
           nbAvance: 0,
@@ -500,13 +533,13 @@ export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): Slo
         };
         slots.set(key, slot);
         tempsAcc.set(key, { sum: 0, n: 0 });
-        tauxAcc.set(key, { sum: 0, n: 0 });
+        tauxAcc.set(key, { usagers: 0, capacite: 0 });
       }
       const montees = toInt(r.values.montees);
       const descentes = toInt(r.values.descentes);
       const taux = tauxFrequentation(r.values);
       const temps = toInt(r.values.temps_aller);
-      slot.parJour.set(j, { montees, taux, temps, present: true });
+      slot.parJour.set(j, { montees, usagers: usagers(r.values), taux, temps, present: true });
       slot.nbDeparts += 1;
       slot.totMontees += montees;
       slot.totDescentes += descentes;
@@ -514,8 +547,8 @@ export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): Slo
       if (r.values.retard === '1') slot.nbRetard += 1;
       if (r.values.avance === '1') slot.nbAvance += 1;
       const ta = tauxAcc.get(key)!;
-      ta.sum += taux;
-      ta.n += 1;
+      ta.usagers += usagers(r.values);
+      ta.capacite += capaciteTrajet(r.values);
       if (temps > 0) {
         const te = tempsAcc.get(key)!;
         te.sum += temps;
@@ -527,7 +560,9 @@ export function consolider(perDay: Map<string, StatRow[]>, jours: string[]): Slo
   const out = [...slots.entries()].map(([key, slot]) => {
     const ta = tauxAcc.get(key)!;
     const te = tempsAcc.get(key)!;
-    slot.tauxMoyen = ta.n > 0 ? ta.sum / ta.n : 0;
+    slot.totUsagers = ta.usagers;
+    slot.totCapacite = ta.capacite;
+    slot.tauxMoyen = ta.capacite > 0 ? ta.usagers / ta.capacite : 0;
     slot.tempsMoyen = te.n > 0 ? te.sum / te.n : 0;
     return slot;
   });

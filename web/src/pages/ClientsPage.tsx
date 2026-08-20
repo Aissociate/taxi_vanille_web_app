@@ -113,7 +113,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
   async function loadCourses() {
     // Sans pagination, Supabase plafonne a 1000 lignes -> le rapport client
     // (base sur TOUTES les courses) etait severement tronque. On charge par pages.
-    const cols = 'id, client_id, date_heure, montant, statut, statut_realisation, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart';
+    const cols = 'id, client_id, date_heure, montant, statut, statut_realisation, depart, arrivee, chauffeur_id, ligne_id, periode, duree_minutes, nb_passagers, passagers_depart, passagers_arrivee, notes, is_brouillon';
     const pageSize = 1000;
     const all: Course[] = [];
     for (let offset = 0; ; offset += pageSize) {
@@ -336,8 +336,18 @@ export function ClientsPage({ user }: ClientsPageProps) {
 
         {/* Recent courses */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          {/* Intitule explicite : on affichait "Courses recentes" sans dire de
+              quoi il s'agissait (les 15 dernieres courses DE CE CLIENT sur la
+              periode selectionnee en haut de page). */}
           <div className="px-5 py-4 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900">Courses recentes</h3>
+            <h3 className="font-semibold text-gray-900">
+              Dernieres courses de {selectedClient.nom}
+            </h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Les {Math.min(15, clientCourses.length)} plus recentes sur la periode selectionnee
+              ({period === 'jour' ? "aujourd'hui" : period === 'semaine' ? 'cette semaine' : 'ce mois'})
+              {clientCourses.length > 15 ? ` — ${clientCourses.length} au total` : ''}
+            </p>
           </div>
           {clientCourses.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">Aucune course sur cette periode</div>

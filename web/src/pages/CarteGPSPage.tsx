@@ -26,6 +26,7 @@ interface Chauffeur {
   prenom: string;
   code: string;
   statut: string;
+  ligne_id: string | null;
 }
 
 interface GpsPing {
@@ -46,6 +47,11 @@ interface CourseActive {
 }
 
 type FilterLigne = 'tous' | string;
+
+// Fenetre de pings chargee par la carte (en heures). Assez large pour couvrir
+// tous les chauffeurs en service, assez courte pour rester legere (rafraichie
+// toutes les 30 s).
+const PING_WINDOW_HOURS = 3;
 
 export function CarteGPSPage() {
   const mapRef = useRef<HTMLDivElement>(null);
@@ -73,7 +79,9 @@ export function CarteGPSPage() {
     const [lignesRes, arretsRes, chauffeursRes, coursesRes] = await Promise.all([
       supabase.from('lignes').select('id, nom, code, couleur').order('code'),
       supabase.from('ligne_arrets').select('*').order('ordre'),
-      supabase.from('chauffeurs').select('id, nom, prenom, code, statut').order('code'),
+      // Seuls les chauffeurs EN SERVICE : les fiches archivees (statut inactif)
+      // gonflaient le compteur "inactifs" de la carte sans jamais rouler.
+      supabase.from('chauffeurs').select('id, nom, prenom, code, statut, ligne_id').eq('statut', 'actif').order('code'),
       supabase.from('courses').select('id, chauffeur_id, ligne_id, statut, statut_realisation').in('statut_realisation', ['en_cours', 'en_retard']),
     ]);
     if (lignesRes.data) setLignes(lignesRes.data);
@@ -82,13 +90,28 @@ export function CarteGPSPage() {
     if (coursesRes.data) setCoursesActives(coursesRes.data);
   }
 
+  // Avant : les 200 derniers pings TOUS CHAUFFEURS CONFONDUS. Les chauffeurs qui
+  // pinguent le plus mangeaient tout le quota -> les autres ressortaient "sans
+  // ping", donc INACTIFS et absents de la carte alors qu'ils roulaient.
+  // Maintenant : TOUS les pings de la fenetre glissante (3 h), pagines. Chaque
+  // chauffeur ayant pingue sur la periode est donc forcement present.
   async function loadPings() {
-    const { data } = await supabase
-      .from('gps_pings')
-      .select('id, chauffeur_id, latitude, longitude, recorded_at, course_execution_id, astreinte_session_id')
-      .order('recorded_at', { ascending: false })
-      .limit(200);
-    if (data) setGpsPings(data);
+    const since = new Date(Date.now() - PING_WINDOW_HOURS * 3600 * 1000).toISOString();
+    const all: GpsPing[] = [];
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('gps_pings')
+        .select('id, chauffeur_id, latitude, longitude, recorded_at, course_execution_id, astreinte_session_id')
+        .gte('recorded_at', since)
+        .order('recorded_at', { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) break;
+      const rows = (data || []) as GpsPing[];
+      all.push(...rows);
+      if (rows.length < PAGE) break;
+    }
+    setGpsPings(all);
   }
 
   function getLastPing(chauffeurId: string): GpsPing | null {
@@ -121,7 +144,9 @@ export function CarteGPSPage() {
       zoomControl: false,
     });
 
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    // Zoom en HAUT a droite : en bas a droite il passait sous le bouton
+    // flottant "Signaler un bug".
+    L.control.zoom({ position: 'topright' }).addTo(map);
 
     L.tileLayer(
       darkMode
@@ -234,12 +259,15 @@ export function CarteGPSPage() {
   const activeCount = chauffeurs.filter(c => isActive(c.id)).length;
   const inactiveCount = chauffeurs.length - activeCount;
 
+  // Filtre par ligne : on retient le chauffeur AFFECTE a la ligne (fiche
+  // chauffeur) ou celui qui roule dessus a l'instant T. Avant, seul le second
+  // critere existait : un chauffeur de la ligne sans course en cours
+  // disparaissait de la liste (ex. H9 absent du filtre CHM).
   const filteredChauffeurs = filterLigne === 'tous'
     ? chauffeurs
-    : chauffeurs.filter(c => {
-        const course = coursesActives.find(co => co.chauffeur_id === c.id);
-        return course?.ligne_id === filterLigne;
-      });
+    : chauffeurs.filter(c =>
+        c.ligne_id === filterLigne
+        || coursesActives.some(co => co.chauffeur_id === c.id && co.ligne_id === filterLigne));
 
   return (
     <div className="h-[calc(100vh-4rem)] flex flex-col -m-8">
@@ -303,9 +331,17 @@ export function CarteGPSPage() {
           {/* Legend */}
           <div className="px-3 py-2 border-b border-gray-50">
             <div className="flex items-center gap-3 text-[10px] text-gray-500">
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Actif (&lt;2min)</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> Inactif</span>
+              <span className="flex items-center gap-1" title="Le telephone du chauffeur a envoye sa position il y a moins de 2 minutes">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" /> Actif (&lt;2min)
+              </span>
+              <span className="flex items-center gap-1" title="Aucune position recue depuis plus de 2 minutes : appli fermee, telephone hors reseau, ou chauffeur pas en service">
+                <span className="w-2 h-2 rounded-full bg-gray-300" /> Inactif
+              </span>
             </div>
+            <p className="text-[9px] text-gray-400 mt-1 leading-tight">
+              Actif = position GPS recue il y a moins de 2 min (appli chauffeur ouverte).
+              Inactif = aucune position recente, le chauffeur peut malgre tout etre en service.
+            </p>
           </div>
 
           {/* Chauffeur list with ping history */}
@@ -347,7 +383,7 @@ export function CarteGPSPage() {
                         </span>
                       )}
                       {!lastPing && (
-                        <span className="text-[10px] text-gray-300">Aucun ping</span>
+                        <span className="text-[10px] text-gray-300">Aucun ping depuis {PING_WINDOW_HOURS} h</span>
                       )}
                     </div>
                   </div>
