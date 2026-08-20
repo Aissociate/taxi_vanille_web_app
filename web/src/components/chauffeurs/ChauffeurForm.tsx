@@ -46,8 +46,30 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
     pin_android: '',
   });
 
+  // Les deux champs PIN sont des <input type="password"> : le gestionnaire de
+  // mots de passe du navigateur les remplissait TOUS LES DEUX avec le mot de
+  // passe enregistre pour le site. Comme "champ non vide = nouveau PIN", la
+  // valeur auto-remplie ecrasait silencieusement l'autre PIN (PIN coordinateur
+  // repasse a 0000, PIN chauffeur passe a 9999, voire un vrai mot de passe
+  // enregistre dans le champ PIN). On exige donc une action explicite : tant
+  // que la case n'est pas cochee, le PIN n'est ni saisissable ni envoye.
+  const [changePin, setChangePin] = useState(!chauffeur);
+  const [changePinAndroid, setChangePinAndroid] = useState(!chauffeur);
+
+  const PIN_RE = /^[0-9]{4}$/; // chauffeur_login() n'accepte que 4 chiffres
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Garde-fou : un PIN non conforme serait accepte par le formulaire mais
+    // REFUSE au login (l'appli exige exactement 4 chiffres) -> compte bloque.
+    if (changePin && form.pin && !PIN_RE.test(form.pin)) {
+      alert('Le PIN chauffeur doit contenir exactement 4 chiffres.');
+      return;
+    }
+    if (form.is_coordinateur && changePinAndroid && form.pin_android && !PIN_RE.test(form.pin_android)) {
+      alert('Le PIN coordinateur doit contenir exactement 4 chiffres.');
+      return;
+    }
     const dateFields = ['carte_conducteur_validite', 'vehicule_date_1ere_immat', 'vehicule_date_controle_technique', 'date_embauche'];
     const payload: Partial<Chauffeur> = {
       ...form,
@@ -59,19 +81,24 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
         (payload as Record<string, unknown>)[field] = null;
       }
     }
-    // PIN chauffeur : vide à l'édition = conserver l'existant ; vide à la création = défaut 1234
-    if (!form.pin && chauffeur) {
-      delete (payload as Record<string, unknown>).pin;
-    } else if (!form.pin && !chauffeur) {
-      (payload as Record<string, unknown>).pin = '1234';
+    // PIN chauffeur : envoye UNIQUEMENT si l'utilisateur a demande le changement
+    // (sinon on n'inclut pas le champ -> la valeur en base est preservee).
+    if (!changePin || !form.pin) {
+      if (chauffeur) {
+        delete (payload as Record<string, unknown>).pin;
+      } else {
+        (payload as Record<string, unknown>).pin = '1234';
+      }
     }
-    // PIN Android (coordinateur) : null si non coordinateur ; sinon même logique que le PIN chauffeur
+    // PIN coordinateur : null si le chauffeur n'est pas coordinateur ; sinon meme regle.
     if (!form.is_coordinateur) {
       payload.pin_android = null;
-    } else if (!form.pin_android && chauffeur) {
-      delete (payload as Record<string, unknown>).pin_android;
-    } else if (!form.pin_android && !chauffeur) {
-      (payload as Record<string, unknown>).pin_android = '1234';
+    } else if (!changePinAndroid || !form.pin_android) {
+      if (chauffeur) {
+        delete (payload as Record<string, unknown>).pin_android;
+      } else {
+        (payload as Record<string, unknown>).pin_android = '1234';
+      }
     }
     onSave(payload);
   }
@@ -278,9 +305,32 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
             </div>
             {form.is_coordinateur && (
               <div className="mt-3">
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">PIN Android coordinateur (laisser vide pour ne pas changer)</label>
-                <input type="password" value={form.pin_android} onChange={(e) => setForm({ ...form, pin_android: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none font-mono tracking-widest" placeholder="****" maxLength={6} />
-                <p className="text-[10px] text-gray-400 mt-1">Code PIN specifique pour l'application Android du coordinateur</p>
+                {chauffeur && (
+                  <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={changePinAndroid}
+                      onChange={(e) => { setChangePinAndroid(e.target.checked); if (!e.target.checked) setForm(f => ({ ...f, pin_android: '' })); }}
+                      className="w-4 h-4 rounded accent-amber-600"
+                    />
+                    <span className="text-xs font-medium text-gray-600">Changer le PIN coordinateur</span>
+                  </label>
+                )}
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">PIN coordinateur (4 chiffres)</label>
+                <input
+                  type="password"
+                  name="pin-coordinateur"
+                  autoComplete="new-password"
+                  inputMode="numeric"
+                  pattern="[0-9]{4}"
+                  maxLength={4}
+                  disabled={!changePinAndroid}
+                  value={form.pin_android}
+                  onChange={(e) => setForm({ ...form, pin_android: e.target.value.replace(/\D/g, '') })}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none font-mono tracking-widest disabled:bg-gray-50 disabled:text-gray-400"
+                  placeholder={changePinAndroid ? '****' : 'PIN inchange'}
+                />
+                <p className="text-[10px] text-gray-400 mt-1">Code PIN de connexion en mode COORDINATEUR dans l'appli mobile (convention maison : 9999)</p>
               </div>
             )}
           </div>
@@ -291,8 +341,32 @@ export function ChauffeurForm({ chauffeur, lignes, onSave, onClose }: ChauffeurF
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Nouveau PIN (laisser vide pour ne pas changer)</label>
-            <input type="password" value={form.pin} onChange={(e) => setForm({ ...form, pin: e.target.value })} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none" placeholder="****" />
+            {chauffeur && (
+              <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={changePin}
+                  onChange={(e) => { setChangePin(e.target.checked); if (!e.target.checked) setForm(f => ({ ...f, pin: '' })); }}
+                  className="w-4 h-4 rounded accent-amber-600"
+                />
+                <span className="text-xs font-medium text-gray-600">Changer le PIN chauffeur</span>
+              </label>
+            )}
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">PIN chauffeur (4 chiffres)</label>
+            <input
+              type="password"
+              name="pin-chauffeur"
+              autoComplete="new-password"
+              inputMode="numeric"
+              pattern="[0-9]{4}"
+              maxLength={4}
+              disabled={!changePin}
+              value={form.pin}
+              onChange={(e) => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none font-mono tracking-widest disabled:bg-gray-50 disabled:text-gray-400"
+              placeholder={changePin ? '****' : 'PIN inchange'}
+            />
+            <p className="text-[10px] text-gray-400 mt-1">Code PIN de connexion en mode CHAUFFEUR dans l'appli mobile (convention maison : 0000)</p>
           </div>
 
           <div className="flex gap-3 pt-4 border-t border-gray-100">

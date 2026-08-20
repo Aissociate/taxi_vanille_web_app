@@ -36,8 +36,32 @@ interface Props {
   onNavigate: (path: string) => void;
 }
 
+// Agrandissement du texte pour les coordinateurs malvoyants (tablette) : les
+// tailles de la page sont en px (text-[10px]...) et ignorent donc le reglage de
+// police du systeme -> on applique un zoom CSS, memorise sur l'appareil.
+const TEXT_ZOOM_KEY = 'coord_text_zoom';
+const TEXT_ZOOM_MIN = 1;
+const TEXT_ZOOM_MAX = 1.6;
+
+function loadTextZoom(): number {
+  const v = parseFloat(localStorage.getItem(TEXT_ZOOM_KEY) || '1');
+  return isNaN(v) ? 1 : Math.min(TEXT_ZOOM_MAX, Math.max(TEXT_ZOOM_MIN, v));
+}
+
 export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const { chauffeur } = useAuth();
+  const [textZoom, setTextZoom] = useState(loadTextZoom);
+
+  const changeTextZoom = (delta: number) => {
+    setTextZoom(z => {
+      const next = Math.min(TEXT_ZOOM_MAX, Math.max(TEXT_ZOOM_MIN, Math.round((z + delta) * 100) / 100));
+      localStorage.setItem(TEXT_ZOOM_KEY, String(next));
+      return next;
+    });
+  };
+
+  // min-height compense le zoom (100vh zoome deborderait de l'ecran).
+  const zoomStyle = { zoom: textZoom, minHeight: `${100 / textZoom}vh` };
   const [courses, setCourses] = useState<CourseWithChauffeur[]>([]);
   const [incidents, setIncidents] = useState<IncidentDetail[]>([]);
   const [loading, setLoading] = useState(true);
@@ -245,7 +269,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
 
   if (selectedIncident) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-gray-50 flex flex-col" style={zoomStyle}>
         <div className="bg-gray-900 p-4 flex items-center gap-3">
           <button type="button" onClick={() => setSelectedIncident(null)} className="p-1"><ArrowLeft size={18} className="text-white" /></button>
           <h2 className="text-white font-bold">Detail Incident</h2>
@@ -294,7 +318,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
 
   if (replacementCourse) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-gray-50 flex flex-col" style={zoomStyle}>
         <div className="bg-gray-900 p-4 flex items-center gap-3">
           <button type="button" onClick={() => { setReplacementCourse(null); setAvailableDrivers([]); }} className="p-1"><ArrowLeft size={18} className="text-white" /></button>
           <h2 className="text-white font-bold">Remplacement</h2>
@@ -334,7 +358,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const incidentCount = incidents.length;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gray-50 flex flex-col" style={zoomStyle}>
       <div className="bg-gray-900 text-white p-4">
         <div className="flex items-center justify-between">
           <div>
@@ -343,6 +367,8 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
             <p className="text-[10px] text-white/70">{chauffeur?.code} - {chauffeur?.prenom} {chauffeur?.nom}</p>
           </div>
           <div className="flex items-center gap-2">
+            <button type="button" onClick={() => changeTextZoom(-0.15)} disabled={textZoom <= TEXT_ZOOM_MIN} aria-label="Reduire le texte" className="px-2 py-1 rounded bg-white/10 font-bold text-xs disabled:opacity-40">A−</button>
+            <button type="button" onClick={() => changeTextZoom(0.15)} disabled={textZoom >= TEXT_ZOOM_MAX} aria-label="Agrandir le texte" className="px-2 py-1 rounded bg-white/10 font-bold text-base disabled:opacity-40">A+</button>
             <button type="button" onClick={() => fetchAll()} className="p-2"><RefreshCw size={16} className="text-white" /></button>
             <button type="button" onClick={() => { clearAuth(); onNavigate('/mobile'); }} className="p-2"><LogOut size={16} className="text-white" /></button>
           </div>
