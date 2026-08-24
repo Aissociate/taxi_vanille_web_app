@@ -4,7 +4,7 @@ import { Receipt, Plus, X, ChevronLeft, ChevronRight, Eye, Check, Trash2, List, 
 import type { User } from '@supabase/supabase-js';
 import { mParts, mDateStr, mMidnightISO } from '../lib/mayotte';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
-import { buildRecapMensuel, type RecapCourse, type RecapPlage } from '../lib/recapMensuel';
+import { buildRecapMensuel, formatHeures, type RecapCourse, type RecapPlage } from '../lib/recapMensuel';
 import { RecapMensuelChauffeur, type RecapPied } from '../components/RecapMensuelChauffeur';
 import { DettesChauffeur, loadDettes, echeancesDuMois, type Dette } from '../components/DettesChauffeur';
 import { buildFactureHtml, numeroFactureMarche, printFacture, type FactureDoc } from '../lib/factureTemplate';
@@ -362,7 +362,9 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   // Astreinte facturee au FORFAIT : nombre d'astreintes realisees x forfait
   // (le mobile confirme l'astreinte en un clic, sans duree -> plus d'heures).
   const [nbAstreintesReal, setNbAstreintesReal] = useState((facture as any)?.nb_astreintes || 0);
-  const [forfaitAstreinte, setForfaitAstreinte] = useState((facture as any)?.forfait_astreinte || 0);
+  // L'astreinte est payee A L'HEURE, au tarif de l'onglet "Astreinte" de la
+  // grille tarifaire (plage propre a la ligne du chauffeur si elle en a une).
+  const [tarifHeureAstreinte, setTarifHeureAstreinte] = useState((facture as any)?.tarif_heure_astreinte || 0);
   const [nbNonPlanifie, setNbNonPlanifie] = useState(0);
   const [, setTarifNonPlanifie] = useState(0);
   const [nbSamedisCoord, setNbSamedisCoord] = useState((facture as any)?.nb_samedis_coordinateur || 0);
@@ -405,6 +407,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   // Complement greve : saisie manuelle, aucune autre source ne le connait.
   const [complementsGreve, setComplementsGreve] = useState<Record<string, number>>(
     ((facture as any)?.recap_journalier?.complements as Record<string, number>) || {});
+  // Heures d'astreinte saisies a la main (minutes par date) : elles priment sur
+  // les creneaux planifies, qui ne couvrent pas toujours le realise.
+  const [heuresAstreinte, setHeuresAstreinte] = useState<Record<string, number>>(
+    ((facture as any)?.recap_journalier?.heures_manuelles as Record<string, number>) || {});
   const [dettes, setDettes] = useState<Dette[]>([]);
   const [entreprise, setEntreprise] = useState<Record<string, string | null> | null>(null);
   const [lignesInfo, setLignesInfo] = useState<Map<string, { code: string; nom: string; depart: string; arrivee: string }>>(new Map());
@@ -491,12 +497,10 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       const fraisTarif = tarifs.find(t => t.cle === 'frais_gestion');
       const kmSeuil = tarifs.find(t => t.cle === 'seuil_km');
       const kmTarif = tarifs.find(t => t.cle === 'tarif_km_depassement');
-      const forfaitAstreinteTarif = tarifs.find(t => t.cle === 'forfait_astreinte');
       if (locationTarif) setTarifLocation(locationTarif.valeur);
       if (fraisTarif) { setTarifFraisGestion(fraisTarif.valeur); setFraisGestion(fraisTarif.actif); }
       if (kmSeuil) setSeuilKm(kmSeuil.valeur);
       if (kmTarif) setTarifKmDepassement(kmTarif.valeur);
-      if (forfaitAstreinteTarif) setForfaitAstreinte(forfaitAstreinteTarif.valeur);
       // Depot de garantie : inactif tant que la direction n'a pas saisi le
       // montant dans Parametres > Tarifs (aucune facture existante n'est touchee).
       const depotTarif = tarifs.find(t => t.cle === 'depot_garantie');
@@ -519,6 +523,13 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     const tarifSam = avgTarif(plagesSamedi);
     const tarifDim = avgTarif(plagesDimanche);
     const tarifAstr = avgTarif(plagesAstreinte);
+    // Tarif horaire d'astreinte : plage propre a la ligne du chauffeur en
+    // priorite, sinon la plage generique (meme regle que le trigger tarif_course).
+    const ligneChauffeur = chauffeurs.find(c => c.id === chauffeurId)?.ligne_id || null;
+    const plageAstreinteRetenue = [...plagesAstreinte]
+      .sort((a, b) => (Number(b.ligne_id === ligneChauffeur) - Number(a.ligne_id === ligneChauffeur)) || (a.ordre - b.ordre))
+      .find(pl => pl.ligne_id === ligneChauffeur || pl.ligne_id == null);
+    if (!facture && plageAstreinteRetenue) setTarifHeureAstreinte(plageAstreinteRetenue.tarif);
 
     // Categorize courses dynamically and accumulate weighted totals
     const courses = coursesRes.data || [];
@@ -702,7 +713,6 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   // (prix trigger tarif_course). Remplace les anciens 6 paquets moyennes.
   const montantTrajets = plagesBreakdown.reduce((s, b) => s + b.total, 0);
   const nbTrajetsVentiles = plagesBreakdown.reduce((s, b) => s + b.count, 0);
-  const montantForfaitAstreinte = nbAstreintesReal * forfaitAstreinte;
   const montantCoordSamedi = nbSamedisCoord * forfaitCoordSamedi;
   const montantCoordDimanche = nbDimanchesCoord * forfaitCoordDimanche;
   const montantCoordSemaine = nbJoursCoordSemaine * forfaitCoordSemaine;
@@ -730,11 +740,18 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const recap = useMemo(() => buildRecapMensuel({
     annee: recapY, mois: recapM, courses: recapCourses, plages: recapPlages,
     feries: recapFeries, sessions: recapSessions, creneaux: recapCreneaux,
-    forfaitAstreinte, complements: complementsGreve,
-  }), [recapY, recapM, recapCourses, recapPlages, recapFeries, recapSessions, recapCreneaux, forfaitAstreinte, complementsGreve]);
+    tarifHeureAstreinte, complements: complementsGreve, heuresManuelles: heuresAstreinte,
+  }), [recapY, recapM, recapCourses, recapPlages, recapFeries, recapSessions, recapCreneaux,
+      tarifHeureAstreinte, complementsGreve, heuresAstreinte]);
   const montantComplementGreve = recap.totaux.complementGreve;
+  // Astreinte = heures retenues x tarif horaire ; le recap est la source unique.
+  const montantAstreinte = recap.totaux.valeurAstreinte;
+  const heuresAstreinteTotal = recap.totaux.minutesAstreinte / 60;
+  // Le planning d'astreinte ne colle pas toujours au realise : on le signale
+  // plutot que de sous-payer en silence.
+  const astreinteIncoherente = recap.totaux.nbAstreintes > 0 && recap.totaux.minutesAstreinte === 0;
 
-  const sousTotal = montantTrajets + montantForfaitAstreinte + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche + montantComplementGreve;
+  const sousTotal = montantTrajets + montantAstreinte + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche + montantComplementGreve;
   const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementEffectif + depotGarantie + montantDettes;
   const netAPayer = sousTotal - totalDeductions;
 
@@ -777,7 +794,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     plagesBreakdown.forEach(b => push(
       `${b.ligneCode} ${b.tranche}${b.libelle ? ' ' + b.libelle : ''} (${DAYTYPE_LABEL[b.typeJour] || b.typeJour})`,
       b.count, b.tarif, b.total));
-    push('Astreintes realisees (forfait)', nbAstreintesReal, forfaitAstreinte, montantForfaitAstreinte);
+    push(`Astreinte (${formatHeures(recap.totaux.minutesAstreinte)})`, heuresAstreinteTotal, tarifHeureAstreinte, montantAstreinte);
     push('Coordinateur (jours de semaine)', nbJoursCoordSemaine, forfaitCoordSemaine, montantCoordSemaine);
     push('Coordinateur (samedis)', nbSamedisCoord, forfaitCoordSamedi, montantCoordSamedi);
     push('Coordinateur (dimanches)', nbDimanchesCoord, forfaitCoordDimanche, montantCoordDimanche);
@@ -836,7 +853,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       })
       .sort((a, b) => a.ligne.localeCompare(b.ligne));
 
-    if (montantForfaitAstreinte) prestations.push({ designation, ligne: `Astreintes (${nbAstreintesReal})`, montant: montantForfaitAstreinte });
+    if (montantAstreinte) prestations.push({ designation, ligne: `Astreinte (${formatHeures(recap.totaux.minutesAstreinte)})`, montant: montantAstreinte });
     if (montantCoordSemaine) prestations.push({ designation, ligne: `Coordination jours de semaine (${nbJoursCoordSemaine})`, montant: montantCoordSemaine });
     if (montantCoordSamedi) prestations.push({ designation, ligne: `Coordination samedis (${nbSamedisCoord})`, montant: montantCoordSamedi });
     if (montantCoordDimanche) prestations.push({ designation, ligne: `Coordination dimanches (${nbDimanchesCoord})`, montant: montantCoordDimanche });
@@ -918,9 +935,9 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         nb_trajets_astreinte: nbAstreinte + nbNonPlanifie,
         tarif_trajet_astreinte: tarifAstreinte,
         nb_astreintes: nbAstreintesReal,
-        forfait_astreinte: forfaitAstreinte,
-        nb_heures_astreinte: 0,
-        tarif_heure_astreinte: 0,
+        forfait_astreinte: 0,               // remplace par la facturation horaire
+        nb_heures_astreinte: heuresAstreinteTotal,
+        tarif_heure_astreinte: tarifHeureAstreinte,
         forfait_coordinateur_samedi: forfaitCoordSamedi,
         forfait_coordinateur_dimanche: forfaitCoordDimanche,
         nb_samedis_coordinateur: nbSamedisCoord,
@@ -938,6 +955,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         // manuelles (complement greve) qui n'existent nulle part ailleurs.
         recap_journalier: {
           complements: complementsGreve,
+          heures_manuelles: heuresAstreinte,
           colonnes: recap.colonnes,
           jours: recap.jours,
           totaux: recap.totaux,
@@ -1084,12 +1102,23 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
                   <p className="text-xs text-gray-400 text-center py-3">Aucun trajet termine sur ce mois.</p>
                 )}
 
-                {/* Astreintes realisees (forfait) */}
-                <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm border-t border-gray-100 pt-2">
-                  <span className="text-gray-700 font-medium">Astreintes realisees <span className="text-[10px] text-gray-400">(forfait)</span></span>
-                  <input type="number" value={nbAstreintesReal} onChange={(e) => setNbAstreintesReal(parseInt(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
-                  <input type="number" step="0.01" value={forfaitAstreinte} onChange={(e) => setForfaitAstreinte(parseFloat(e.target.value) || 0)} className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
-                  <span className="text-right font-bold text-gray-900">{montantForfaitAstreinte.toFixed(2)} EUR</span>
+                {/* Astreinte a l'heure : les heures viennent du recap (creneaux
+                    planifies, corrigeables a la main jour par jour). */}
+                <div className="space-y-1.5 border-t border-gray-100 pt-2">
+                  <div className="grid grid-cols-[1fr_80px_100px_100px] gap-2 items-center text-sm">
+                    <span className="text-gray-700 font-medium">
+                      Astreinte <span className="text-[10px] text-gray-400">({formatHeures(recap.totaux.minutesAstreinte)} — {recap.totaux.nbAstreintes} confirmee(s))</span>
+                    </span>
+                    <span className="text-center tabular-nums text-gray-700">{heuresAstreinteTotal.toFixed(2)} h</span>
+                    <input type="number" step="0.01" value={tarifHeureAstreinte} onChange={(e) => setTarifHeureAstreinte(parseFloat(e.target.value) || 0)} title="EUR par heure d'astreinte" className="px-2 py-1.5 border border-orange-200 rounded-lg text-center text-orange-700 bg-orange-50/50 focus:ring-1 focus:ring-orange-400 outline-none" />
+                    <span className="text-right font-bold text-gray-900">{montantAstreinte.toFixed(2)} EUR</span>
+                  </div>
+                  {astreinteIncoherente && (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                      {recap.totaux.nbAstreintes} astreinte(s) confirmee(s) par le chauffeur mais aucun creneau planifie sur le mois :
+                      saisissez les heures jour par jour dans le recap ci-dessous, sinon l'astreinte sera payee 0.
+                    </p>
+                  )}
                 </div>
 
                 {/* Forfait coordinateur */}
@@ -1181,6 +1210,11 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
                   recap={recap}
                   pied={recapPied}
                   onComplementChange={(date, montant) => setComplementsGreve(prev => ({ ...prev, [date]: montant }))}
+                  onHeuresChange={(date, minutes) => setHeuresAstreinte(prev => {
+                    const next = { ...prev };
+                    if (minutes === null) delete next[date]; else next[date] = minutes;
+                    return next;
+                  })}
                   readOnly={facture?.statut === 'payee'}
                 />
               )}

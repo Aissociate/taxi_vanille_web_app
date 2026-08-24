@@ -7,9 +7,13 @@
 // puis la valeur du jour.
 //
 // Regle d'or : la colonne "Valeur" est la somme des `montant` des courses (prix
-// autoritatif pose par le trigger `tarif_course`) + le forfait des astreintes du
-// jour. Le total du recap reconcilie donc AU CENTIME avec le sous-total de la
-// facture — c'est tout l'interet du document pour la DAF.
+// autoritatif pose par le trigger `tarif_course`) + l'astreinte du jour. Le
+// total du recap reconcilie donc AU CENTIME avec le sous-total de la facture —
+// c'est tout l'interet du document pour la DAF.
+//
+// L'astreinte est payee A L'HEURE, au tarif de l'onglet "Astreinte" de la
+// grille tarifaire (Parametres > Tarification). Elle remplace l'ancien forfait
+// par astreinte realisee.
 
 import { mParts, mDateStr } from './mayotte';
 
@@ -66,8 +70,11 @@ export interface RecapJour {
   jourSemaine: number;        // 1 = lundi ... 7 = dimanche (comme le tableau DAF)
   libelle: string;            // "mercredi 1 juillet 2026"
   isFerie: boolean;
-  minutesAstreinte: number;   // duree cumulee des creneaux d'astreinte planifies
-  nbAstreintes: number;       // nombre de sessions (base du forfait)
+  minutesAstreinte: number;   // duree retenue (saisie manuelle, sinon creneaux planifies)
+  minutesPlanifiees: number;  // ce que disent les creneaux, avant saisie manuelle
+  heuresSaisies: boolean;     // true si la duree du jour a ete saisie a la main
+  nbAstreintes: number;       // nombre de sessions confirmees par le chauffeur
+  valeurAstreinte: number;    // EUR : heures retenues x tarif horaire
   planifies: number;
   nonEffectues: number;
   nonPlanifiesEffectues: number;
@@ -79,7 +86,9 @@ export interface RecapJour {
 
 export interface RecapTotaux {
   minutesAstreinte: number;
+  minutesPlanifiees: number;
   nbAstreintes: number;
+  valeurAstreinte: number;
   planifies: number;
   nonEffectues: number;
   nonPlanifiesEffectues: number;
@@ -157,12 +166,21 @@ export function buildRecapMensuel(params: {
   sessions: RecapAstreinteSession[];
   /** Creneaux d'astreinte planifies (colonne "heures d'astreinte"). */
   creneaux: RecapAstreinteCreneau[];
-  forfaitAstreinte: number;
+  /** EUR par heure d'astreinte (onglet "Astreinte" de la grille tarifaire). */
+  tarifHeureAstreinte: number;
   /** Complements greve deja saisis, par date : conserves entre deux recalculs. */
   complements?: Record<string, number>;
+  /**
+   * Heures d'astreinte saisies a la main (minutes, par date). Les creneaux
+   * planifies ne couvrent pas toujours les astreintes reellement faites (un
+   * chauffeur peut avoir 15 sessions confirmees pour 12 h planifiees) : la
+   * saisie manuelle prend alors le pas sur le planning.
+   */
+  heuresManuelles?: Record<string, number>;
 }): RecapMensuel {
-  const { annee, mois, courses, plages, feries, sessions, creneaux, forfaitAstreinte } = params;
+  const { annee, mois, courses, plages, feries, sessions, creneaux, tarifHeureAstreinte } = params;
   const complements = params.complements || {};
+  const heuresManuelles = params.heuresManuelles || {};
 
   const nbJours = new Date(annee, mois, 0).getDate();
   const jours: RecapJour[] = [];
@@ -219,8 +237,11 @@ export function buildRecapMensuel(params: {
       }
     });
 
-    const minutesAstreinte = dayCreneaux.reduce((s, a) => s + dureeMinutes(a), 0);
-    valeur += nbSessions * forfaitAstreinte;
+    const minutesPlanifiees = dayCreneaux.reduce((s, a) => s + dureeMinutes(a), 0);
+    const heuresSaisies = Object.prototype.hasOwnProperty.call(heuresManuelles, date);
+    const minutesAstreinte = heuresSaisies ? heuresManuelles[date] : minutesPlanifiees;
+    const valeurAstreinte = Math.round((minutesAstreinte / 60) * tarifHeureAstreinte * 100) / 100;
+    valeur += valeurAstreinte;
 
     jours.push({
       date,
@@ -228,7 +249,10 @@ export function buildRecapMensuel(params: {
       libelle: `${JOURS_FR[jsDow]} ${d} ${MOIS_FR[mois - 1]} ${annee}`,
       isFerie,
       minutesAstreinte,
+      minutesPlanifiees,
+      heuresSaisies,
       nbAstreintes: nbSessions,
+      valeurAstreinte,
       planifies,
       nonEffectues,
       nonPlanifiesEffectues,
@@ -242,12 +266,15 @@ export function buildRecapMensuel(params: {
   const colonnesTriees = [...colonnes.values()].sort((a, b) => a.ordre - b.ordre || a.libelle.localeCompare(b.libelle));
 
   const totaux: RecapTotaux = {
-    minutesAstreinte: 0, nbAstreintes: 0, planifies: 0, nonEffectues: 0,
+    minutesAstreinte: 0, minutesPlanifiees: 0, nbAstreintes: 0, valeurAstreinte: 0,
+    planifies: 0, nonEffectues: 0,
     nonPlanifiesEffectues: 0, effectues: 0, parPlage: {}, valeur: 0, complementGreve: 0,
   };
   jours.forEach(j => {
     totaux.minutesAstreinte += j.minutesAstreinte;
+    totaux.minutesPlanifiees += j.minutesPlanifiees;
     totaux.nbAstreintes += j.nbAstreintes;
+    totaux.valeurAstreinte += j.valeurAstreinte;
     totaux.planifies += j.planifies;
     totaux.nonEffectues += j.nonEffectues;
     totaux.nonPlanifiesEffectues += j.nonPlanifiesEffectues;
@@ -265,6 +292,16 @@ export function buildRecapMensuel(params: {
 /** "03:00" a partir de minutes — format du tableau DAF. */
 export function formatHeures(minutes: number): string {
   const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
+  const m = Math.round(minutes % 60);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** "03:00" ou "3" ou "3,5" -> minutes. `null` si la saisie est illisible. */
+export function parseHeures(saisie: string): number | null {
+  const v = saisie.trim().replace(',', '.');
+  if (v === '') return null;
+  const hm = v.match(/^(\d{1,3}):([0-5]?\d)$/);
+  if (hm) return Number(hm[1]) * 60 + Number(hm[2]);
+  const dec = Number(v);
+  return Number.isFinite(dec) && dec >= 0 ? Math.round(dec * 60) : null;
 }

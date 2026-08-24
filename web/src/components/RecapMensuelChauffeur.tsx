@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { Download, Printer, ChevronDown, ChevronUp } from 'lucide-react';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
-import { formatHeures, type RecapMensuel } from '../lib/recapMensuel';
+import { formatHeures, parseHeures, type RecapMensuel } from '../lib/recapMensuel';
 
 /** Bloc du bas : le meme que sur le document de la DAF. */
 export interface RecapPied {
@@ -36,17 +36,23 @@ interface Props {
   pied: RecapPied;
   /** Saisie du complement greve (aucune autre source ne le connait). */
   onComplementChange: (date: string, montant: number) => void;
+  /**
+   * Saisie manuelle des heures d'astreinte (minutes, ou null pour revenir au
+   * creneau planifie). Necessaire quand le planning ne couvre pas les
+   * astreintes reellement faites.
+   */
+  onHeuresChange: (date: string, minutes: number | null) => void;
   readOnly?: boolean;
 }
 
 const eur = (n: number) => `${(Math.round(n * 100) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} EUR`;
 
-export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplementChange, readOnly }: Props) {
+export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplementChange, onHeuresChange, readOnly }: Props) {
   const [open, setOpen] = useState(false);
   const { colonnes, jours, totaux } = recap;
 
   const enTetes = [
-    'Jour', 'Date', 'N°', 'H. astreinte', 'Planifies', 'Non effectues',
+    'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
     'Non planifies effectues', 'Effectues',
     ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
     'Valeur', 'Complement greve',
@@ -58,6 +64,7 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
       rows.push([
         j.libelle.split(' ')[0], j.date, j.jourSemaine,
         formatHeures(j.minutesAstreinte),
+        Math.round(j.valeurAstreinte * 100) / 100,
         j.planifies, j.nonEffectues, j.nonPlanifiesEffectues, j.effectues,
         ...colonnes.map(c => j.parPlage[c.key] || 0),
         Math.round(j.valeur * 100) / 100,
@@ -67,6 +74,7 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
     rows.push([
       'TOTAL', '', '',
       formatHeures(totaux.minutesAstreinte),
+      Math.round(totaux.valeurAstreinte * 100) / 100,
       totaux.planifies, totaux.nonEffectues, totaux.nonPlanifiesEffectues, totaux.effectues,
       ...colonnes.map(c => totaux.parPlage[c.key] || 0),
       Math.round(totaux.valeur * 100) / 100,
@@ -109,6 +117,7 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
     const body = jours.map(j => `<tr${j.isFerie ? ' class="ferie"' : ''}>
       <td>${esc(j.libelle)}</td><td>${esc(j.date)}</td><td class="c">${j.jourSemaine}</td>
       <td class="c">${formatHeures(j.minutesAstreinte)}</td>
+      <td class="r">${j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
       <td class="c">${j.planifies}</td><td class="c">${j.nonEffectues}</td>
       <td class="c">${j.nonPlanifiesEffectues}</td><td class="c">${j.effectues}</td>
       ${colonnes.map(c => `<td class="c">${j.parPlage[c.key] || 0}</td>`).join('')}
@@ -116,6 +125,7 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
     </tr>`).join('');
     const tot = `<tr class="tot"><td colspan="3">TOTAL</td>
       <td class="c">${formatHeures(totaux.minutesAstreinte)}</td>
+      <td class="r">${eur(totaux.valeurAstreinte)}</td>
       <td class="c">${totaux.planifies}</td><td class="c">${totaux.nonEffectues}</td>
       <td class="c">${totaux.nonPlanifiesEffectues}</td><td class="c">${totaux.effectues}</td>
       ${colonnes.map(c => `<td class="c">${totaux.parPlage[c.key] || 0}</td>`).join('')}
@@ -183,7 +193,8 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
                 <tr>
                   <th className="px-2 py-2 text-left font-semibold">Jour</th>
                   <th className="px-2 py-2 text-center font-semibold" title="Numero du jour dans la semaine (1 = lundi)">N°</th>
-                  <th className="px-2 py-2 text-center font-semibold">H. astreinte</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Heures d'astreinte : creneau planifie, modifiable a la main">H. astreinte</th>
+                  <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
                   <th className="px-2 py-2 text-center font-semibold">Planifies</th>
                   <th className="px-2 py-2 text-center font-semibold">Non effectues</th>
                   <th className="px-2 py-2 text-center font-semibold">Non planif. effectues</th>
@@ -203,7 +214,28 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
                   <tr key={j.date} className={`${j.isFerie ? 'bg-yellow-50/50' : j.jourSemaine >= 6 ? 'bg-blue-50/20' : ''} hover:bg-gray-50/60`}>
                     <td className="px-2 py-1.5 font-medium text-gray-800">{j.libelle}</td>
                     <td className="px-2 py-1.5 text-center text-gray-500">{j.jourSemaine}</td>
-                    <td className="px-2 py-1.5 text-center font-mono text-gray-600">{formatHeures(j.minutesAstreinte)}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <input
+                        type="text"
+                        defaultValue={formatHeures(j.minutesAstreinte)}
+                        key={`${j.date}-${j.minutesAstreinte}`}
+                        onBlur={e => {
+                          const v = e.target.value.trim();
+                          // Vide -> on repart du creneau planifie.
+                          if (v === '') { onHeuresChange(j.date, null); return; }
+                          const min = parseHeures(v);
+                          if (min === null) { e.target.value = formatHeures(j.minutesAstreinte); return; }
+                          onHeuresChange(j.date, min === j.minutesPlanifiees ? null : min);
+                        }}
+                        disabled={readOnly}
+                        title={j.heuresSaisies
+                          ? `Saisi a la main (planning : ${formatHeures(j.minutesPlanifiees)})`
+                          : 'Creneau planifie — modifiable'}
+                        className={`w-16 px-1 py-0.5 rounded text-center font-mono border outline-none focus:ring-1 focus:ring-amber-400 disabled:bg-gray-50 disabled:text-gray-400 disabled:border-gray-200 ${
+                          j.heuresSaisies ? 'border-amber-300 bg-amber-50 text-amber-800 font-semibold' : 'border-gray-200 text-gray-600'}`}
+                      />
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-gray-700">{j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
                     <td className="px-2 py-1.5 text-center text-gray-700">{j.planifies || ''}</td>
                     <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-amber-700 font-semibold' : 'text-gray-400'}`}>{j.nonEffectues || ''}</td>
                     <td className={`px-2 py-1.5 text-center ${j.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}>{j.nonPlanifiesEffectues || ''}</td>
@@ -229,6 +261,7 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
                   <td className="px-2 py-2">TOTAL</td>
                   <td></td>
                   <td className="px-2 py-2 text-center font-mono">{formatHeures(totaux.minutesAstreinte)}</td>
+                  <td className="px-2 py-2 text-right">{eur(totaux.valeurAstreinte)}</td>
                   <td className="px-2 py-2 text-center">{totaux.planifies}</td>
                   <td className="px-2 py-2 text-center">{totaux.nonEffectues}</td>
                   <td className="px-2 py-2 text-center">{totaux.nonPlanifiesEffectues}</td>
