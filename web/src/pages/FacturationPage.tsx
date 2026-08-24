@@ -4,6 +4,10 @@ import { Receipt, Plus, X, ChevronLeft, ChevronRight, Eye, Check, Trash2, List, 
 import type { User } from '@supabase/supabase-js';
 import { mParts, mDateStr, mMidnightISO } from '../lib/mayotte';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
+import { buildRecapMensuel, type RecapCourse, type RecapPlage } from '../lib/recapMensuel';
+import { RecapMensuelChauffeur, type RecapPied } from '../components/RecapMensuelChauffeur';
+import { DettesChauffeur, loadDettes, echeancesDuMois, type Dette } from '../components/DettesChauffeur';
+import { buildFactureHtml, numeroFactureMarche, printFacture, type FactureDoc } from '../lib/factureTemplate';
 
 interface LigneSupp {
   libelle: string;
@@ -385,6 +389,26 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
   const [soldeAvanceAvant, setSoldeAvanceAvant] = useState(facture?.solde_avance_avant || 0);
   const [saving, setSaving] = useState(false);
 
+  // ---- Recap mensuel jour par jour + dettes etalees (demande DAF 18/08/2026) ----
+  // Location : la DAF veut voir le nombre de jours loues a cote du forfait.
+  const [nbJoursLocation, setNbJoursLocation] = useState((facture as any)?.nb_jours_location || 0);
+  const [depotGarantie, setDepotGarantie] = useState((facture as any)?.depot_garantie || 0);
+  // Le recap a besoin de TOUTES les courses du mois (y compris non realisees et
+  // non planifiees), la facture n'en charge que les realisees.
+  const [recapCourses, setRecapCourses] = useState<RecapCourse[]>([]);
+  const [recapPlages, setRecapPlages] = useState<RecapPlage[]>([]);
+  const [recapFeries, setRecapFeries] = useState<Set<string>>(new Set());
+  // Sessions = astreintes realisees (compte / forfait). Creneaux = astreintes
+  // planifiees, seules porteuses d'une vraie plage horaire.
+  const [recapSessions, setRecapSessions] = useState<{ date: string }[]>([]);
+  const [recapCreneaux, setRecapCreneaux] = useState<{ date_debut: string; date_fin: string | null }[]>([]);
+  // Complement greve : saisie manuelle, aucune autre source ne le connait.
+  const [complementsGreve, setComplementsGreve] = useState<Record<string, number>>(
+    ((facture as any)?.recap_journalier?.complements as Record<string, number>) || {});
+  const [dettes, setDettes] = useState<Dette[]>([]);
+  const [entreprise, setEntreprise] = useState<Record<string, string | null> | null>(null);
+  const [lignesInfo, setLignesInfo] = useState<Map<string, { code: string; nom: string; depart: string; arrivee: string }>>(new Map());
+
   useEffect(() => {
     // On recharge aussi pour une facture EXISTANTE : sinon les compteurs de
     // trajets restaient a 0 et re-enregistrer ecrasait la facture avec un net a 0.
@@ -434,12 +458,14 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
         .select('date')
         .gte('date', moisStart)
         .lte('date', moisEnd),
-      supabase.from('lignes').select('id, code, nom'),
+      supabase.from('lignes').select('id, code, nom, depart, arrivee'),
     ]);
     // id -> {code, nom} pour libeller le detail par ligne de transport.
+    const lignesRows = (lignesRes.data as { id: string; code: string; nom: string; depart: string | null; arrivee: string | null }[] | null) || [];
     const ligneMap = new Map<string, { code: string; nom: string }>(
-      ((lignesRes.data as { id: string; code: string; nom: string }[] | null) || []).map(l => [l.id, { code: l.code, nom: l.nom }]),
+      lignesRows.map(l => [l.id, { code: l.code, nom: l.nom }]),
     );
+    setLignesInfo(new Map(lignesRows.map(l => [l.id, { code: l.code, nom: l.nom, depart: l.depart || '', arrivee: l.arrivee || '' }])));
 
     // Valeurs par defaut : uniquement pour une NOUVELLE facture. Pour une facture
     // existante on conserve ce qui a ete saisi/enregistre (deja charge via facture?.*).
@@ -471,6 +497,12 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       if (kmSeuil) setSeuilKm(kmSeuil.valeur);
       if (kmTarif) setTarifKmDepassement(kmTarif.valeur);
       if (forfaitAstreinteTarif) setForfaitAstreinte(forfaitAstreinteTarif.valeur);
+      // Depot de garantie : inactif tant que la direction n'a pas saisi le
+      // montant dans Parametres > Tarifs (aucune facture existante n'est touchee).
+      const depotTarif = tarifs.find(t => t.cle === 'depot_garantie');
+      if (depotTarif && depotTarif.actif) setDepotGarantie(depotTarif.valeur);
+      // Par defaut le vehicule est loue tout le mois (cas nominal du modele DAF).
+      setNbJoursLocation(lastDay);
     }
 
     // Jours feries du mois (cle "YYYY-MM-DD") pour tarifer au bon tarif ferie.
@@ -590,7 +622,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     // modele mobile a un seul bouton "realisee", plus de duree) -> forfait.
     const { data: astreinteSessions } = await supabase
       .from('astreinte_sessions')
-      .select('id')
+      .select('id, date')
       .eq('chauffeur_id', chauffeurId)
       .gte('date', moisStart)
       .lte('date', moisEnd);
@@ -598,6 +630,36 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     if (!facture && astreinteSessions) {
       setNbAstreintesReal(astreinteSessions.length);
     }
+    setRecapSessions((astreinteSessions || []).map(s => ({ date: s.date })));
+
+    // Recap jour par jour : contrairement a la facture, il doit voir AUSSI les
+    // trajets planifies non effectues et les non planifies -> requete dediee.
+    const [recapRes, creneauxRes, dettesRows, entRes] = await Promise.all([
+      supabase.from('courses')
+        .select('id, date_heure, ligne_id, montant, is_astreinte, statut_planification, statut_realisation')
+        .eq('chauffeur_id', chauffeurId)
+        .gte('date_heure', debutInstant)
+        .lt('date_heure', finInstant)
+        .order('date_heure', { ascending: true })
+        .range(0, 9999),                       // sans .range() PostgREST tronque a 1000
+      // Creneaux d'astreinte PLANIFIES : la seule source d'une duree reelle
+      // (les sessions realisees ont heure_debut == heure_fin).
+      supabase.from('astreintes')
+        .select('date_debut, date_fin')
+        .eq('chauffeur_id', chauffeurId)
+        .gte('date_debut', debutInstant)
+        .lt('date_debut', finInstant),
+      loadDettes(chauffeurId),
+      // Pas de filtre user_id : les donnees sont partagees org-wide, l'entete de
+      // facture doit sortir identique quel que soit le directeur connecte.
+      supabase.from('entreprise').select('*').order('created_at', { ascending: true }).limit(1).maybeSingle(),
+    ]);
+    setRecapCourses((recapRes.data as RecapCourse[] | null) || []);
+    setRecapCreneaux((creneauxRes.data as { date_debut: string; date_fin: string | null }[] | null) || []);
+    setRecapPlages(plagesTyped);
+    setRecapFeries(feries);
+    setDettes(dettesRows);
+    if (entRes.data) setEntreprise(entRes.data as Record<string, string | null>);
 
     // Facture existante : restaurer les compteurs enregistres (JSON notes) et les
     // tarifs agreges stockes, afin de retrouver la facture telle qu'enregistree
@@ -656,12 +718,42 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
 
   // On ne rembourse jamais plus que le solde d'avance restant.
   const remboursementEffectif = Math.min(remboursementAvance, soldeAvanceAvant);
-  const sousTotal = montantTrajets + montantForfaitAstreinte + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche;
-  const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementEffectif;
+
+  // Echeances de dette tombant sur le mois facture : retenues automatiquement.
+  const echeancesMois = useMemo(() => echeancesDuMois(dettes, moisReference), [dettes, moisReference]);
+  const montantDettes = echeancesMois.reduce((s, e) => s + e.montant, 0);
+
+  // Recap jour par jour. La colonne "Valeur" reprend les montants reels des
+  // courses (trigger tarif_course) : le total du recap doit tomber sur le
+  // montant des trajets de la facture, c'est la raison d'etre du document.
+  const [recapY, recapM] = moisReference.slice(0, 7).split('-').map(Number);
+  const recap = useMemo(() => buildRecapMensuel({
+    annee: recapY, mois: recapM, courses: recapCourses, plages: recapPlages,
+    feries: recapFeries, sessions: recapSessions, creneaux: recapCreneaux,
+    forfaitAstreinte, complements: complementsGreve,
+  }), [recapY, recapM, recapCourses, recapPlages, recapFeries, recapSessions, recapCreneaux, forfaitAstreinte, complementsGreve]);
+  const montantComplementGreve = recap.totaux.complementGreve;
+
+  const sousTotal = montantTrajets + montantForfaitAstreinte + montantLignesSupp + montantCoordSemaine + montantCoordSamedi + montantCoordDimanche + montantComplementGreve;
+  const totalDeductions = montantLocation + montantFraisGestion + montantDepassementKm + remboursementEffectif + depotGarantie + montantDettes;
   const netAPayer = sousTotal - totalDeductions;
 
   const selectedChauffeur = chauffeurs.find(c => c.id === chauffeurId);
   const totalTrajets = nbTrajetsVentiles;
+
+  const nbJoursMois = new Date(recapY, recapM, 0).getDate();
+  const recapPied: RecapPied = {
+    kmDebut: kmDebutMois, kmFin: kmFinMois, kmParcourus, seuilKm, kmSurplus,
+    vehiculeLoue: locationVehicule, nbJoursLocation, nbJoursMois,
+    fraisGestion: montantFraisGestion, forfaitLocation: montantLocation,
+    depotGarantie, supplementKm: montantDepassementKm,
+    dettes: echeancesMois.map(e => ({ libelle: e.libelle, montant: e.montant })),
+    remboursementAvance: remboursementEffectif, netAPayer,
+  };
+
+  async function reloadDettes() {
+    if (chauffeurId) setDettes(await loadDettes(chauffeurId));
+  }
 
   function addLigneSupp() {
     setLignesSupp([...lignesSupp, { libelle: '', quantite: 1, montant: 0 }]);
@@ -690,11 +782,14 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     push('Coordinateur (samedis)', nbSamedisCoord, forfaitCoordSamedi, montantCoordSamedi);
     push('Coordinateur (dimanches)', nbDimanchesCoord, forfaitCoordDimanche, montantCoordDimanche);
     lignesSupp.forEach(l => push(l.libelle || 'Ligne supplementaire', l.quantite, l.montant, l.quantite * l.montant));
+    push('Complement greve', 0, 0, montantComplementGreve);
     const deductions: { label: string; montant: number }[] = [];
     const pushD = (label: string, montant: number) => { if (montant) deductions.push({ label, montant }); };
     pushD('Location vehicule', montantLocation);
     pushD('Frais de gestion', montantFraisGestion);
+    pushD('Depot de garantie', depotGarantie);
     pushD('Depassement kilometrique', montantDepassementKm);
+    echeancesMois.forEach(e => pushD(e.libelle, e.montant));
     pushD('Remboursement avance', remboursementEffectif);
     return { numero: facture?.numero || 'BROUILLON', chLabel, code: ch?.code || 'facture', mois: moisReference, lines, deductions, sousTotal, totalDeductions, netAPayer };
   }
@@ -714,32 +809,86 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
     downloadSpreadsheet(`Facture_${d.code}_${d.mois}`, [{ name: 'Facture', rows }]);
   }
 
+  // Facture au format SOUS-TRAITANT demande par la DAF : c'est l'artisan qui
+  // facture Taxi Vanille (entete a ses coordonnees, detail par ligne de
+  // transport, bloc compensations, NET A REGLER).
+  function buildFactureDoc(): FactureDoc {
+    const ch = selectedChauffeur;
+    const [y, m] = moisReference.slice(0, 7).split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const prefixe = (entreprise?.facture_prefixe as string) || '';
+
+    // Une prestation par LIGNE de transport : c'est la maille du document DAF.
+    const parLigne = new Map<string, number>();
+    plagesBreakdown.forEach(b => {
+      const ligneId = b.key.split('::')[0];
+      parLigne.set(ligneId, (parLigne.get(ligneId) || 0) + b.total);
+    });
+    const designation = (entreprise?.marche_libelle as string)
+      ? `Prestations de transport realisees dans le cadre du ${entreprise?.marche_libelle}`
+      : 'Prestations de transport realisees';
+    const prestations = [...parLigne.entries()]
+      .filter(([, montant]) => montant !== 0)
+      .map(([ligneId, montant]) => {
+        const info = lignesInfo.get(ligneId);
+        const trajet = info && info.depart && info.arrivee ? `${info.depart} <-> ${info.arrivee}` : (info?.nom || 'Sans ligne');
+        return { designation, ligne: `${info?.code ? info.code + ' — ' : ''}${trajet}`, montant };
+      })
+      .sort((a, b) => a.ligne.localeCompare(b.ligne));
+
+    if (montantForfaitAstreinte) prestations.push({ designation, ligne: `Astreintes (${nbAstreintesReal})`, montant: montantForfaitAstreinte });
+    if (montantCoordSemaine) prestations.push({ designation, ligne: `Coordination jours de semaine (${nbJoursCoordSemaine})`, montant: montantCoordSemaine });
+    if (montantCoordSamedi) prestations.push({ designation, ligne: `Coordination samedis (${nbSamedisCoord})`, montant: montantCoordSamedi });
+    if (montantCoordDimanche) prestations.push({ designation, ligne: `Coordination dimanches (${nbDimanchesCoord})`, montant: montantCoordDimanche });
+    lignesSupp.forEach(l => { if (l.quantite * l.montant) prestations.push({ designation: l.libelle || 'Prestation complementaire', ligne: '', montant: l.quantite * l.montant }); });
+    if (montantComplementGreve) prestations.push({ designation: 'Complement greve', ligne: '', montant: montantComplementGreve });
+
+    const compensations: { libelle: string; montant: number }[] = [];
+    const pushC = (libelle: string, montant: number) => { if (montant) compensations.push({ libelle, montant }); };
+    pushC('Frais de gestion', montantFraisGestion);
+    pushC(`Location vehicule${nbJoursLocation ? ` (${nbJoursLocation} j / ${lastDay} j)` : ''}`, montantLocation);
+    pushC('Depot de garantie mensuel', depotGarantie);
+    pushC(`Supplement kilometrage (${kmSurplus.toFixed(0)} km)`, montantDepassementKm);
+    echeancesMois.forEach(e => pushC(e.libelle, e.montant));
+    pushC('Remboursement avance', remboursementEffectif);
+
+    return {
+      numero: facture?.numero || numeroFactureMarche(prefixe, y, m, ch?.code || ''),
+      moisNumero: m,
+      moisLabel: `${MONTHS_FR[m - 1]} ${y}`,
+      dateFacture: new Date(y, m - 1, lastDay).toLocaleDateString('fr-FR'),
+      artisan: {
+        matricule: ch?.code || '',
+        nomComplet: ch ? `${ch.nom} ${ch.prenom}`.trim() : '',
+        adresse: ch?.adresse || '',
+        telephone: ch?.telephone || '',
+        email: ch?.email || '',
+        siret: ch?.nif_siret || '',
+      },
+      destinataire: {
+        nom: (entreprise?.nom as string) || 'Taxi Vanille',
+        adresse: (entreprise?.adresse as string) || '',
+        telephone: (entreprise?.telephone as string) || '',
+        siret: (entreprise?.siret as string) || '',
+      },
+      marche: {
+        libelle: (entreprise?.marche_libelle as string) || '',
+        contratDate: entreprise?.marche_contrat_date ? new Date(entreprise.marche_contrat_date as string).toLocaleDateString('fr-FR') : '',
+        mentionTva: (entreprise?.mention_tva as string) || '',
+        modeReglement: (entreprise?.mode_reglement as string) || '',
+      },
+      prestations,
+      compensations,
+      montantFacture: sousTotal,
+      montantCompensation: totalDeductions,
+      netARegler: netAPayer,
+    };
+  }
+
   function exportFacturePdf() {
-    const d = factureExportData();
-    const esc = (s: string | number) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
-    const money = (n: number) => n.toFixed(2);
-    const lineRows = d.lines.map(l => `<tr><td>${esc(l.label)}</td><td class="c">${l.nb}</td><td class="r">${money(l.tarif)}</td><td class="r">${money(l.montant)}</td></tr>`).join('');
-    const dedRows = d.deductions.map(l => `<tr><td>${esc(l.label)}</td><td></td><td></td><td class="r">-${money(l.montant)}</td></tr>`).join('');
-    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Facture ${esc(d.numero)}</title>
-<style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:28px;max-width:820px;margin:auto}h1{font-size:20px;margin:0 0 4px}.meta{font-size:13px;color:#333;line-height:1.6}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border:1px solid #ddd;padding:7px 9px;font-size:13px}th{background:#f3f4f6;text-align:left}.r{text-align:right}.c{text-align:center}.tot td{font-weight:bold}.net td{background:#065f46;color:#fff;font-size:15px}.foot{margin-top:22px;font-size:11px;color:#666}@media print{body{padding:0}}</style>
-</head><body>
-<h1>Facture de retrocession</h1>
-<div class="meta"><b>Numero :</b> ${esc(d.numero)}<br><b>Chauffeur :</b> ${esc(d.chLabel)}<br><b>Mois :</b> ${esc(d.mois)}</div>
-<table><thead><tr><th>Prestation</th><th class="c">Qte</th><th class="r">Tarif</th><th class="r">Montant (EUR)</th></tr></thead>
-<tbody>${lineRows}
-<tr class="tot"><td colspan="3">Sous-total</td><td class="r">${money(d.sousTotal)}</td></tr>
-${dedRows}
-<tr class="tot"><td colspan="3">Total deductions</td><td class="r">-${money(d.totalDeductions)}</td></tr>
-<tr class="tot net"><td colspan="3">NET A PAYER</td><td class="r">${money(d.netAPayer)}</td></tr>
-</tbody></table>
-<p class="foot">Document genere le ${new Date().toLocaleDateString('fr-FR')} — Taxi Vanille.</p>
-</body></html>`;
-    const w = window.open('', '_blank');
-    if (!w) { alert("Impossible d'ouvrir la fenetre d'impression (popup bloquee par le navigateur)."); return; }
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    setTimeout(() => w.print(), 350);
+    if (!printFacture(buildFactureHtml(buildFactureDoc()))) {
+      alert("Impossible d'ouvrir la fenetre d'impression (popup bloquee par le navigateur).");
+    }
   }
 
   async function handleSave(statut: string) {
@@ -748,7 +897,15 @@ ${dedRows}
     }
     setSaving(true);
     try {
-      const numero = facture?.numero || `F${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`;
+      // Numerotation du marche (CADEMA-2026-07-C4) des qu'un prefixe est
+      // configure dans Parametres > Entreprise ; sinon on garde l'ancien format.
+      // Une facture existante ne se renumerote jamais.
+      const prefixeFacture = (entreprise?.facture_prefixe as string) || '';
+      const [numY, numM] = moisReference.slice(0, 7).split('-').map(Number);
+      const numero = facture?.numero
+        || (prefixeFacture
+          ? numeroFactureMarche(prefixeFacture, numY, numM, selectedChauffeur?.code || '')
+          : `F${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`);
       const payload = {
         numero,
         chauffeur_id: chauffeurId || null,
@@ -772,8 +929,19 @@ ${dedRows}
         nb_jours_coordinateur_semaine: nbJoursCoordSemaine,
         location_vehicule: locationVehicule,
         tarif_location: tarifLocation,
+        nb_jours_location: nbJoursLocation,
         frais_gestion: fraisGestion,
         tarif_frais_gestion: tarifFraisGestion,
+        depot_garantie: depotGarantie,
+        montant_dettes: montantDettes,
+        // Recap fige : le detail jour par jour tel que facture, + les saisies
+        // manuelles (complement greve) qui n'existent nulle part ailleurs.
+        recap_journalier: {
+          complements: complementsGreve,
+          colonnes: recap.colonnes,
+          jours: recap.jours,
+          totaux: recap.totaux,
+        },
         km_debut_mois: kmDebutMois,
         km_fin_mois: kmFinMois,
         seuil_km: seuilKm,
@@ -803,15 +971,27 @@ ${dedRows}
         user_id: user.id,
       };
 
-      const { error } = facture
-        ? await supabase.from('factures').update(payload).eq('id', facture.id)
-        : await supabase.from('factures').insert(payload);
+      const { data: saved, error } = facture
+        ? await supabase.from('factures').update(payload).eq('id', facture.id).select('id').maybeSingle()
+        : await supabase.from('factures').insert(payload).select('id').maybeSingle();
 
       if (error) {
         alert(error.code === '23505'
           ? 'Une facture existe deja pour ce chauffeur et ce mois de reference.'
           : `Erreur lors de l'enregistrement: ${error.message}`);
         return;
+      }
+
+      // Une echeance n'est consideree comme remboursee qu'une fois la facture
+      // sortie du brouillon : un brouillon peut encore etre supprime ou change.
+      const factureId = saved?.id || facture?.id || null;
+      if (echeancesMois.length > 0) {
+        const ids = echeancesMois.map(e => e.echeanceId);
+        await supabase.from('chauffeur_dette_echeances')
+          .update(statut === 'brouillon'
+            ? { statut: 'prevue', facture_id: null, updated_at: new Date().toISOString() }
+            : { statut: 'appliquee', facture_id: factureId, updated_at: new Date().toISOString() })
+          .in('id', ids);
       }
       onSaved();
     } finally {
@@ -992,6 +1172,29 @@ ${dedRows}
                 )}
               </div>
 
+              {/* Recap mensuel jour par jour : piece justificative de la facture
+                  (modele demande par la DAF le 18/08/2026). */}
+              {chauffeurId && (
+                <RecapMensuelChauffeur
+                  titre={selectedChauffeur ? `${selectedChauffeur.code} ${selectedChauffeur.nom} ${selectedChauffeur.prenom}`.trim() : ''}
+                  moisLabel={`${MONTHS_FR[recapM - 1]} ${recapY}`}
+                  recap={recap}
+                  pied={recapPied}
+                  onComplementChange={(date, montant) => setComplementsGreve(prev => ({ ...prev, [date]: montant }))}
+                  readOnly={facture?.statut === 'payee'}
+                />
+              )}
+
+              {/* Dettes etalees sur plusieurs mois */}
+              {chauffeurId && (
+                <DettesChauffeur
+                  chauffeurId={chauffeurId}
+                  moisFacture={moisReference}
+                  dettes={dettes}
+                  onReload={reloadDettes}
+                />
+              )}
+
               {/* Deductions */}
               <div className="bg-red-50/50 border border-red-200 rounded-xl p-4 space-y-4">
                 <h3 className="text-xs font-bold text-red-700 uppercase">Deductions</h3>
@@ -1007,11 +1210,37 @@ ${dedRows}
                   </div>
                   {locationVehicule && (
                     <div className="flex items-center gap-2">
+                      {/* Jours loues / jours du mois : justificatif attendu par la DAF. */}
+                      <input type="number" min={0} max={nbJoursMois} value={nbJoursLocation} onChange={(e) => setNbJoursLocation(parseInt(e.target.value) || 0)} title="Nombre de jours de location dans le mois" className="w-16 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-right outline-none focus:ring-2 focus:ring-amber-500" />
+                      <span className="text-xs text-gray-500">/ {nbJoursMois} j</span>
                       <input type="number" step="0.01" value={tarifLocation} onChange={(e) => setTarifLocation(parseFloat(e.target.value) || 0)} className="w-24 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-right outline-none focus:ring-2 focus:ring-amber-500" />
                       <span className="text-xs text-gray-500">EUR</span>
                     </div>
                   )}
                 </div>
+
+                {/* Depot de garantie mensuel */}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-700">Depot de garantie mensuel</span>
+                  <div className="flex items-center gap-2">
+                    <input type="number" step="0.01" value={depotGarantie} onChange={(e) => setDepotGarantie(parseFloat(e.target.value) || 0)} className="w-24 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-right outline-none focus:ring-2 focus:ring-amber-500" />
+                    <span className="text-xs text-gray-500">EUR</span>
+                  </div>
+                </div>
+
+                {/* Echeances de dette du mois : posees dans le bloc "Dettes",
+                    imputees ici automatiquement (non modifiables a la volee). */}
+                {echeancesMois.length > 0 && (
+                  <div className="space-y-1 pt-2 border-t border-red-200">
+                    <h4 className="text-[11px] font-semibold text-gray-600">Echeances de dette du mois</h4>
+                    {echeancesMois.map(e => (
+                      <div key={e.echeanceId} className="flex items-center justify-between text-xs">
+                        <span className="text-gray-500">{e.libelle}</span>
+                        <span className="font-bold text-red-700">-{e.montant.toFixed(2)} EUR</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* Frais de gestion */}
                 <div className="flex items-center justify-between">
