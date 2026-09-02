@@ -274,7 +274,9 @@ export function TarifsPage({ user }: TarifsPageProps) {
             <span />
             <span className="text-[10px] text-gray-400 uppercase font-semibold">A</span>
             <span className="text-[10px] text-gray-400 uppercase font-semibold">Libelle</span>
-            <span className="text-[10px] text-gray-400 uppercase font-semibold text-right">Tarif / trajet</span>
+            <span className="text-[10px] text-gray-400 uppercase font-semibold text-right">
+              {activeTab === 'astreinte' ? 'Tarif / heure' : 'Tarif / trajet'}
+            </span>
             <span />
           </div>
 
@@ -460,35 +462,19 @@ export function TarifsPage({ user }: TarifsPageProps) {
         </div>
       </div>
 
-      {/* FORFAIT PAR ASTREINTE REALISEE */}
+      {/* ASTREINTE : rappel de la regle de valorisation */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-5 py-4">
           <div className="flex items-center gap-2 mb-3">
             <Moon className="w-4 h-4 text-amber-600" />
-            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">Forfait par astreinte realisee</span>
+            <span className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">Astreinte</span>
           </div>
-
-          <p className="text-sm text-gray-600 mb-4">
-            Montant paye au chauffeur pour chaque astreinte realisee (confirmee d'un clic sur l'appli).
-            Remplace l'ancien tarif horaire : on ne compte plus les heures mais le nombre d'astreintes du mois.
+          <p className="text-sm text-gray-600">
+            L'astreinte est payee <b>a l'heure</b> : heures du creneau planifie x le tarif de l'onglet
+            <b> Astreinte</b> ci-dessus. Le forfait par astreinte realisee n'est plus applique.
+            Quand le planning ne couvre pas les astreintes reellement faites, les heures se corrigent
+            jour par jour dans le recap mensuel de la facture.
           </p>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <h4 className="font-medium text-gray-900">Forfait par astreinte</h4>
-              <p className="text-xs text-gray-500">Multiplie par le nombre d'astreintes realisees sur le mois</p>
-            </div>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                step="0.01"
-                value={getFrais('forfait_astreinte')?.valeur ?? 50}
-                onChange={(e) => updateFraisLocal('forfait_astreinte', { valeur: parseFloat(e.target.value) || 0, periode: 'astreinte', actif: true })}
-                className="w-24 px-2 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none"
-              />
-              <span className="text-xs text-gray-400">EUR / astreinte</span>
-            </div>
-          </div>
         </div>
       </div>
 

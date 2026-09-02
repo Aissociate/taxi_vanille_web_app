@@ -1,0 +1,282 @@
+// Recap mensuel du chauffeur : la piece justificative jour par jour qui
+// accompagne la facture (modele DAF du 18/08/2026, fichier "C4 Ligne 4 07 2026").
+//
+// Les colonnes de ventilation sont construites a partir des plages tarifaires
+// reellement rencontrees dans le mois : chaque ligne de transport a sa propre
+// grille, on ne code donc aucune colonne en dur.
+
+import { useState } from 'react';
+import { Download, Printer, ChevronDown, ChevronUp } from 'lucide-react';
+import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
+import { formatHeures, parseHeures, type RecapMensuel } from '../lib/recapMensuel';
+
+/** Bloc du bas : le meme que sur le document de la DAF. */
+export interface RecapPied {
+  kmDebut: number;
+  kmFin: number;
+  kmParcourus: number;
+  seuilKm: number;
+  kmSurplus: number;
+  vehiculeLoue: boolean;
+  nbJoursLocation: number;
+  nbJoursMois: number;
+  fraisGestion: number;
+  forfaitLocation: number;
+  depotGarantie: number;
+  supplementKm: number;
+  dettes: { libelle: string; montant: number }[];
+  remboursementAvance: number;
+  netAPayer: number;
+}
+
+interface Props {
+  titre: string;               // "C4 — TOUMBOU Toibourani"
+  moisLabel: string;           // "Juillet 2026"
+  recap: RecapMensuel;
+  pied: RecapPied;
+  /** Saisie du complement greve (aucune autre source ne le connait). */
+  onComplementChange: (date: string, montant: number) => void;
+  /**
+   * Saisie manuelle des heures d'astreinte (minutes, ou null pour revenir au
+   * creneau planifie). Necessaire quand le planning ne couvre pas les
+   * astreintes reellement faites.
+   */
+  onHeuresChange: (date: string, minutes: number | null) => void;
+  readOnly?: boolean;
+}
+
+const eur = (n: number) => `${(Math.round(n * 100) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} EUR`;
+
+export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplementChange, onHeuresChange, readOnly }: Props) {
+  const [open, setOpen] = useState(false);
+  const { colonnes, jours, totaux } = recap;
+
+  const enTetes = [
+    'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
+    'Non planifies effectues', 'Effectues',
+    ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
+    'Valeur', 'Complement greve',
+  ];
+
+  function lignesExport(): CellValue[][] {
+    const rows: CellValue[][] = [enTetes];
+    jours.forEach(j => {
+      rows.push([
+        j.libelle.split(' ')[0], j.date, j.jourSemaine,
+        formatHeures(j.minutesAstreinte),
+        Math.round(j.valeurAstreinte * 100) / 100,
+        j.planifies, j.nonEffectues, j.nonPlanifiesEffectues, j.effectues,
+        ...colonnes.map(c => j.parPlage[c.key] || 0),
+        Math.round(j.valeur * 100) / 100,
+        Math.round(j.complementGreve * 100) / 100,
+      ]);
+    });
+    rows.push([
+      'TOTAL', '', '',
+      formatHeures(totaux.minutesAstreinte),
+      Math.round(totaux.valeurAstreinte * 100) / 100,
+      totaux.planifies, totaux.nonEffectues, totaux.nonPlanifiesEffectues, totaux.effectues,
+      ...colonnes.map(c => totaux.parPlage[c.key] || 0),
+      Math.round(totaux.valeur * 100) / 100,
+      Math.round(totaux.complementGreve * 100) / 100,
+    ]);
+    return rows;
+  }
+
+  function lignesPied(): CellValue[][] {
+    const rows: CellValue[][] = [
+      ['Recapitulatif', 'Valeur'],
+      ['Nbre kilometre debut mois', pied.kmDebut],
+      ['Nbre kilometre fin de mois', pied.kmFin],
+      ['Nbre kilometre parcouru', pied.kmParcourus],
+      [`Nbre km > ${pied.seuilKm}`, pied.kmSurplus],
+      ['Vehicule loue', pied.vehiculeLoue ? 1 : 0],
+      ['Nombre de jour de location', pied.nbJoursLocation],
+      ['Nombre de jour dans le mois', pied.nbJoursMois],
+      ['Frais de gestion', -Math.round(pied.fraisGestion * 100) / 100],
+      ['Forfait location vehicule', -Math.round(pied.forfaitLocation * 100) / 100],
+      ['Depot de garantie mensuel', -Math.round(pied.depotGarantie * 100) / 100],
+      ['Supplement kilometrage', -Math.round(pied.supplementKm * 100) / 100],
+    ];
+    pied.dettes.forEach(d => rows.push([d.libelle, -Math.round(d.montant * 100) / 100]));
+    if (pied.remboursementAvance) rows.push(['Remboursement avance', -Math.round(pied.remboursementAvance * 100) / 100]);
+    rows.push(['NET A PAYER', Math.round(pied.netAPayer * 100) / 100]);
+    return rows;
+  }
+
+  function exportExcel() {
+    downloadSpreadsheet(`Recap_${titre.replace(/[^\w-]+/g, '_')}_${moisLabel.replace(/\s+/g, '_')}`, [
+      { name: 'Recap journalier', rows: lignesExport() },
+      { name: 'Recapitulatif', rows: lignesPied() },
+    ]);
+  }
+
+  function exportPdf() {
+    const esc = (s: string | number) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
+    const head = `<tr>${enTetes.map(h => `<th>${esc(h)}</th>`).join('')}</tr>`;
+    const body = jours.map(j => `<tr${j.isFerie ? ' class="ferie"' : ''}>
+      <td>${esc(j.libelle)}</td><td>${esc(j.date)}</td><td class="c">${j.jourSemaine}</td>
+      <td class="c">${formatHeures(j.minutesAstreinte)}</td>
+      <td class="r">${j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
+      <td class="c">${j.planifies}</td><td class="c">${j.nonEffectues}</td>
+      <td class="c">${j.nonPlanifiesEffectues}</td><td class="c">${j.effectues}</td>
+      ${colonnes.map(c => `<td class="c">${j.parPlage[c.key] || 0}</td>`).join('')}
+      <td class="r">${eur(j.valeur)}</td><td class="r">${j.complementGreve ? eur(j.complementGreve) : ''}</td>
+    </tr>`).join('');
+    const tot = `<tr class="tot"><td colspan="3">TOTAL</td>
+      <td class="c">${formatHeures(totaux.minutesAstreinte)}</td>
+      <td class="r">${eur(totaux.valeurAstreinte)}</td>
+      <td class="c">${totaux.planifies}</td><td class="c">${totaux.nonEffectues}</td>
+      <td class="c">${totaux.nonPlanifiesEffectues}</td><td class="c">${totaux.effectues}</td>
+      ${colonnes.map(c => `<td class="c">${totaux.parPlage[c.key] || 0}</td>`).join('')}
+      <td class="r">${eur(totaux.valeur)}</td><td class="r">${eur(totaux.complementGreve)}</td></tr>`;
+    const piedRows = lignesPied().slice(1)
+      .map(r => `<tr><td>${esc(String(r[0]))}</td><td class="r">${typeof r[1] === 'number' ? r[1].toLocaleString('fr-FR') : esc(String(r[1] ?? ''))}</td></tr>`).join('');
+    const tarifs = colonnes.map(c => `${esc(c.libelle)} : ${c.tarif.toFixed(2)} EUR`).join(' &nbsp;|&nbsp; ');
+
+    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Recap ${esc(titre)} ${esc(moisLabel)}</title>
+<style>
+  @page { size: A4 landscape; margin: 10mm; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #111; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .sub { color: #4b5563; margin-bottom: 8px; }
+  .tarifs { background: #fef3c7; border: 1px solid #fcd34d; padding: 5px 8px; margin-bottom: 8px; font-size: 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #d1d5db; padding: 3px 5px; }
+  th { background: #f3f4f6; font-size: 9px; text-align: left; }
+  .c { text-align: center; } .r { text-align: right; white-space: nowrap; }
+  .ferie { background: #fffbeb; }
+  .tot td { font-weight: bold; background: #f3f4f6; }
+  .pied { margin-top: 14px; width: 340px; }
+  .pied tr:last-child td { background: #065f46; color: #fff; font-weight: bold; }
+</style></head><body>
+<h1>Recap mensuel — ${esc(titre)}</h1>
+<div class="sub">${esc(moisLabel)}</div>
+<div class="tarifs"><b>Mode tarif trajet :</b> ${tarifs}</div>
+<table><thead>${head}</thead><tbody>${body}${tot}</tbody></table>
+<table class="pied"><tbody>${piedRows}</tbody></table>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { alert("Impossible d'ouvrir la fenetre d'impression (popup bloquee)."); return; }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 350);
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 text-xs font-bold text-gray-500 uppercase hover:text-gray-700">
+          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          Recap mensuel jour par jour ({jours.length} jours — {totaux.effectues} trajets realises)
+        </button>
+        <div className="flex gap-2">
+          <button onClick={exportPdf} title="Version imprimable (Enregistrer en PDF)" className="px-2.5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 flex items-center gap-1.5">
+            <Printer className="w-3.5 h-3.5" /> PDF
+          </button>
+          <button onClick={exportExcel} title="Telecharger le recap au format Excel" className="px-2.5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 flex items-center gap-1.5">
+            <Download className="w-3.5 h-3.5" /> Excel
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="border-t border-gray-100">
+          <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-[11px] text-amber-900">
+            <span className="font-semibold">Mode tarif trajet :</span>{' '}
+            {colonnes.map(c => `${c.libelle} ${c.tarif.toFixed(2)} EUR`).join(' | ') || 'aucune plage tarifaire sur le mois'}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px] whitespace-nowrap">
+              <thead className="bg-gray-50 text-gray-500">
+                <tr>
+                  <th className="px-2 py-2 text-left font-semibold">Jour</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Numero du jour dans la semaine (1 = lundi)">N°</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Heures d'astreinte : creneau planifie, modifiable a la main">H. astreinte</th>
+                  <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
+                  <th className="px-2 py-2 text-center font-semibold">Planifies</th>
+                  <th className="px-2 py-2 text-center font-semibold">Non effectues</th>
+                  <th className="px-2 py-2 text-center font-semibold">Non planif. effectues</th>
+                  <th className="px-2 py-2 text-center font-semibold">Effectues</th>
+                  {colonnes.map(c => (
+                    <th key={c.key} className="px-2 py-2 text-center font-semibold" title={`${c.tarif.toFixed(2)} EUR / trajet`}>
+                      {c.libelle}
+                      <span className="block text-[9px] font-normal text-gray-400">{c.tarif.toFixed(2)} EUR</span>
+                    </th>
+                  ))}
+                  <th className="px-2 py-2 text-right font-semibold">Valeur</th>
+                  <th className="px-2 py-2 text-center font-semibold">Compl. greve</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {jours.map(j => (
+                  <tr key={j.date} className={`${j.isFerie ? 'bg-yellow-50/50' : j.jourSemaine >= 6 ? 'bg-blue-50/20' : ''} hover:bg-gray-50/60`}>
+                    <td className="px-2 py-1.5 font-medium text-gray-800">{j.libelle}</td>
+                    <td className="px-2 py-1.5 text-center text-gray-500">{j.jourSemaine}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <input
+                        type="text"
+                        defaultValue={formatHeures(j.minutesAstreinte)}
+                        key={`${j.date}-${j.minutesAstreinte}`}
+                        onBlur={e => {
+                          const v = e.target.value.trim();
+                          // Vide -> on repart du creneau planifie.
+                          if (v === '') { onHeuresChange(j.date, null); return; }
+                          const min = parseHeures(v);
+                          if (min === null) { e.target.value = formatHeures(j.minutesAstreinte); return; }
+                          onHeuresChange(j.date, min === j.minutesPlanifiees ? null : min);
+                        }}
+                        disabled={readOnly}
+                        title={j.heuresSaisies
+                          ? `Saisi a la main (planning : ${formatHeures(j.minutesPlanifiees)})`
+                          : 'Creneau planifie — modifiable'}
+                        className={`w-16 px-1 py-0.5 rounded text-center font-mono border outline-none focus:ring-1 focus:ring-amber-400 disabled:bg-gray-50 disabled:text-gray-400 disabled:border-gray-200 ${
+                          j.heuresSaisies ? 'border-amber-300 bg-amber-50 text-amber-800 font-semibold' : 'border-gray-200 text-gray-600'}`}
+                      />
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-gray-700">{j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
+                    <td className="px-2 py-1.5 text-center text-gray-700">{j.planifies || ''}</td>
+                    <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-amber-700 font-semibold' : 'text-gray-400'}`}>{j.nonEffectues || ''}</td>
+                    <td className={`px-2 py-1.5 text-center ${j.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}>{j.nonPlanifiesEffectues || ''}</td>
+                    <td className="px-2 py-1.5 text-center font-semibold text-gray-800">{j.effectues || ''}</td>
+                    {colonnes.map(c => (
+                      <td key={c.key} className="px-2 py-1.5 text-center text-gray-600">{j.parPlage[c.key] || ''}</td>
+                    ))}
+                    <td className="px-2 py-1.5 text-right font-semibold text-gray-800">{j.valeur ? eur(j.valeur) : ''}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <input
+                        type="number" step="0.01" value={j.complementGreve || ''}
+                        onChange={e => onComplementChange(j.date, parseFloat(e.target.value) || 0)}
+                        disabled={readOnly}
+                        placeholder="0"
+                        className="w-20 px-1 py-0.5 border border-blue-200 bg-blue-50/50 text-blue-700 rounded text-center outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-gray-50 disabled:text-gray-400 disabled:border-gray-200"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-gray-100 font-bold text-gray-800">
+                <tr>
+                  <td className="px-2 py-2">TOTAL</td>
+                  <td></td>
+                  <td className="px-2 py-2 text-center font-mono">{formatHeures(totaux.minutesAstreinte)}</td>
+                  <td className="px-2 py-2 text-right">{eur(totaux.valeurAstreinte)}</td>
+                  <td className="px-2 py-2 text-center">{totaux.planifies}</td>
+                  <td className="px-2 py-2 text-center">{totaux.nonEffectues}</td>
+                  <td className="px-2 py-2 text-center">{totaux.nonPlanifiesEffectues}</td>
+                  <td className="px-2 py-2 text-center">{totaux.effectues}</td>
+                  {colonnes.map(c => (
+                    <td key={c.key} className="px-2 py-2 text-center">{totaux.parPlage[c.key] || 0}</td>
+                  ))}
+                  <td className="px-2 py-2 text-right">{eur(totaux.valeur)}</td>
+                  <td className="px-2 py-2 text-center">{eur(totaux.complementGreve)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
