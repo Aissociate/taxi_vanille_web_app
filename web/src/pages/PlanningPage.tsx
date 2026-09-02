@@ -344,8 +344,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const [dupLigneFilter, setDupLigneFilter] = useState('');
   const [dupTargetDates, setDupTargetDates] = useState<string[]>([]);
   const [dupCalMonth, setDupCalMonth] = useState(new Date());
-  const [dupIncludeAstreintes, setDupIncludeAstreintes] = useState(false);
-  const [dupIncludeCreneaux, setDupIncludeCreneaux] = useState(false);
+  // Astreintes et creneaux coordinateur : selection UNITAIRE (comme les courses).
+  // Avant, deux cases "tout ou rien" : impossible de ne dupliquer qu'un seul
+  // coordinateur, donc toute modification obligeait a refaire tous les jours.
+  const [dupSelectedAstrIds, setDupSelectedAstrIds] = useState<Set<string>>(new Set());
+  const [dupSelectedCrenIds, setDupSelectedCrenIds] = useState<Set<string>>(new Set());
 
   async function loadJoursFeries() {
     const { data } = await supabase.from('jours_feries').select('date, recurrent');
@@ -374,8 +377,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
     setDupLigneFilter('');
     setDupTargetDates([]);
     setDupCalMonth(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
-    setDupIncludeAstreintes(false);
-    setDupIncludeCreneaux(false);
+    setDupSelectedAstrIds(new Set());
+    setDupSelectedCrenIds(new Set());
     // Pre-select all duplicable courses in current view
     const duplicable = getDuplicableCourses();
     setDupSelectedIds(new Set(duplicable.map(c => c.id)));
@@ -452,8 +455,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
   }
 
   async function handleDuplicate() {
-    if (dupSelectedIds.size === 0 && !dupIncludeAstreintes && !dupIncludeCreneaux) {
-      alert('Selectionnez au moins une course, ou cochez les astreintes / creneaux a dupliquer');
+    if (dupSelectedIds.size === 0 && dupSelectedAstrIds.size === 0 && dupSelectedCrenIds.size === 0) {
+      alert('Selectionnez au moins une course, une astreinte ou un creneau coordinateur a dupliquer');
       return;
     }
     setDupLoading(true);
@@ -467,8 +470,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
         && (!dupChauffeurFilter || c.chauffeur_id === dupChauffeurFilter)
         && (!dupLigneFilter || c.ligne_id === dupLigneFilter)
       );
-      const sourceAstreintes = dupIncludeAstreintes ? getDuplicableAstreintes() : [];
-      const sourceCreneaux = dupIncludeCreneaux ? getDuplicableCreneaux() : [];
+      const sourceAstreintes = getDuplicableAstreintes().filter(a => dupSelectedAstrIds.has(a.id));
+      const sourceCreneaux = getDuplicableCreneaux().filter(cc => dupSelectedCrenIds.has(cc.id));
 
       const newCourses: Array<Record<string, unknown>> = [];
       const newAstreintes: Array<Record<string, unknown>> = [];
@@ -2196,6 +2199,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
       {/* Duplication Modal */}
       {showDuplicate && (() => {
         const duplicable = getDuplicableCourses();
+        const dupAstreintes = getDuplicableAstreintes();
+        const dupCreneaux = getDuplicableCreneaux();
         const filteredDup = duplicable.filter(c =>
           (!dupChauffeurFilter || c.chauffeur_id === dupChauffeurFilter)
           && (!dupLigneFilter || c.ligne_id === dupLigneFilter)
@@ -2296,22 +2301,80 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 <p className="text-[10px] text-gray-400 mt-1">{dupSelectedIds.size} course(s) selectionnee(s)</p>
               </div>
 
-              {/* Autres elements a inclure */}
-              <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase mb-2 block">Inclure aussi</label>
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-3 px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input type="checkbox" checked={dupIncludeAstreintes} onChange={(e) => setDupIncludeAstreintes(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
-                    <span className="text-xs font-medium text-gray-800 flex-1">Les astreintes</span>
-                    <span className="text-[10px] text-gray-400">{getDuplicableAstreintes().length} sur la {view === 'jour' ? 'journee' : 'semaine'}</span>
-                  </label>
-                  <label className="flex items-center gap-3 px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input type="checkbox" checked={dupIncludeCreneaux} onChange={(e) => setDupIncludeCreneaux(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
-                    <span className="text-xs font-medium text-gray-800 flex-1">Les creneaux coordinateur</span>
-                    <span className="text-[10px] text-gray-400">{getDuplicableCreneaux().length} sur la {view === 'jour' ? 'journee' : 'semaine'}</span>
-                  </label>
+              {/* Autres elements a inclure : astreintes et creneaux coordinateur se
+                  cochent UN PAR UN, comme les courses. Avant c'etait deux cases
+                  "tout ou rien" : on ne pouvait pas dupliquer un seul coordinateur,
+                  donc le moindre changement obligeait a refaire tous les jours. */}
+              {(dupAstreintes.length > 0 || dupCreneaux.length > 0) && (
+                <div className="space-y-3">
+                  {dupAstreintes.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Astreintes de la {view === 'jour' ? 'journee' : 'semaine'}</label>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setDupSelectedAstrIds(new Set(dupAstreintes.map(a => a.id)))} className="text-[10px] text-amber-600 font-medium hover:underline">Tout</button>
+                          <button type="button" onClick={() => setDupSelectedAstrIds(new Set())} className="text-[10px] text-gray-500 font-medium hover:underline">Aucun</button>
+                        </div>
+                      </div>
+                      <div className="border border-gray-200 rounded-lg max-h-32 overflow-y-auto divide-y divide-gray-100">
+                        {dupAstreintes.map(a => {
+                          const ch = chauffeurs.find(x => x.id === a.chauffeur_id);
+                          const li = lignes.find(x => x.id === a.ligne_id);
+                          const checked = dupSelectedAstrIds.has(a.id);
+                          return (
+                            <label key={a.id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                              <input type="checkbox" checked={checked} onChange={() => {
+                                const next = new Set(dupSelectedAstrIds);
+                                checked ? next.delete(a.id) : next.add(a.id);
+                                setDupSelectedAstrIds(next);
+                              }} className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500" />
+                              <div className="flex-1 min-w-0">
+                                <span className="text-xs font-medium text-gray-800">{view === 'semaine' ? <span className="text-amber-600 capitalize mr-1">{FR_DAYS[mDow(a.date_debut)]}</span> : null}{fmtHM(a.date_debut)} → {fmtHM(a.date_fin)}</span>
+                                <span className="text-xs text-gray-500 ml-2">{ch ? `${ch.code} ${ch.nom}` : 'Non affecte'}</span>
+                              </div>
+                              {li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1">{dupSelectedAstrIds.size} astreinte(s) selectionnee(s)</p>
+                    </div>
+                  )}
+                  {dupCreneaux.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Creneaux coordinateur de la {view === 'jour' ? 'journee' : 'semaine'}</label>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setDupSelectedCrenIds(new Set(dupCreneaux.map(cc => cc.id)))} className="text-[10px] text-indigo-600 font-medium hover:underline">Tout</button>
+                          <button type="button" onClick={() => setDupSelectedCrenIds(new Set())} className="text-[10px] text-gray-500 font-medium hover:underline">Aucun</button>
+                        </div>
+                      </div>
+                      <div className="border border-gray-200 rounded-lg max-h-32 overflow-y-auto divide-y divide-gray-100">
+                        {dupCreneaux.map(cc => {
+                          const co = chauffeurs.find(x => x.id === cc.coordinateur_id);
+                          const li = lignes.find(x => x.id === cc.ligne_id);
+                          const checked = dupSelectedCrenIds.has(cc.id);
+                          return (
+                            <label key={cc.id} className="flex items-center gap-3 px-3 py-2 hover:bg-indigo-50/40 cursor-pointer">
+                              <input type="checkbox" checked={checked} onChange={() => {
+                                const next = new Set(dupSelectedCrenIds);
+                                checked ? next.delete(cc.id) : next.add(cc.id);
+                                setDupSelectedCrenIds(next);
+                              }} className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                              <div className="flex-1 min-w-0">
+                                <span className="text-xs font-medium text-gray-800">{view === 'semaine' ? <span className="text-indigo-600 capitalize mr-1">{FR_DAYS[mDow(cc.date_debut)]}</span> : null}{fmtHM(cc.date_debut)} → {fmtHM(cc.date_fin)}</span>
+                                <span className="text-xs text-gray-500 ml-2">{co ? `${co.code} ${co.nom} ${co.prenom}` : 'Coordinateur'}</span>
+                              </div>
+                              {li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1">{dupSelectedCrenIds.size} creneau(x) selectionne(s) · chaque creneau peut etre duplique seul, sur les jours de son choix</p>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
               {/* Step 2: Target - calendrier jour par jour a cocher */}
               <div>
@@ -2384,7 +2447,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
               {/* Summary */}
               <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
                 <p className="text-xs font-medium text-amber-800">
-                  {dupSelectedIds.size} course(s){dupIncludeAstreintes ? ` + ${getDuplicableAstreintes().length} astreinte(s)` : ''}{dupIncludeCreneaux ? ` + ${getDuplicableCreneaux().length} creneau(x)` : ''} × {dupTargetDates.length} jour(s) coche(s)
+                  {dupSelectedIds.size} course(s){dupSelectedAstrIds.size ? ` + ${dupSelectedAstrIds.size} astreinte(s)` : ''}{dupSelectedCrenIds.size ? ` + ${dupSelectedCrenIds.size} creneau(x) coordinateur` : ''} × {dupTargetDates.length} jour(s) coche(s)
                   {' '}→ crees en <span className="font-bold">brouillon</span>
                 </p>
               </div>
@@ -2395,7 +2458,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 Annuler
               </button>
               <button type="button" onClick={handleDuplicate}
-                disabled={dupLoading || (dupSelectedIds.size === 0 && !dupIncludeAstreintes && !dupIncludeCreneaux) || dupTargetDates.length === 0}
+                disabled={dupLoading || (dupSelectedIds.size === 0 && dupSelectedAstrIds.size === 0 && dupSelectedCrenIds.size === 0) || dupTargetDates.length === 0}
                 className="flex-1 px-3 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2">
                 {dupLoading ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><Copy className="w-3.5 h-3.5" /> Dupliquer</>}
               </button>
