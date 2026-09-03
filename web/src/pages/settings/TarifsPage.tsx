@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Calendar, Star, Moon, X } from 'lucide-react';
+import { TARIF_DEFAUTS } from '../../lib/tarifDefauts';
 import type { User } from '@supabase/supabase-js';
 
 interface TarifsPageProps {
@@ -396,7 +397,7 @@ export function TarifsPage({ user }: TarifsPageProps) {
               <input
                 type="number"
                 step="0.01"
-                value={fraisGestion?.valeur ?? 30}
+                value={fraisGestion?.valeur ?? TARIF_DEFAUTS.frais_gestion}
                 onChange={(e) => updateFraisLocal('frais_gestion', { valeur: parseFloat(e.target.value) || 0 })}
                 className="w-20 px-2 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500 outline-none"
               />

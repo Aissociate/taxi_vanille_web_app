@@ -28,6 +28,14 @@ interface Course {
   is_brouillon: boolean;
 }
 
+// Realisation reelle d'une course, remontee par l'appli chauffeur : heure de
+// depart et heure d'arrivee reelles (table course_executions).
+interface Execution {
+  course_id: string;
+  heure_debut: string | null;
+  heure_fin: string | null;
+}
+
 interface Chauffeur {
   id: string;
   code: string;
@@ -193,6 +201,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   // Créneaux de coordination (planning coordinateur indépendant)
   const [coordCreneaux, setCoordCreneaux] = useState<CoordCreneau[]>([]);
+  const [executions, setExecutions] = useState<Map<string, Execution>>(new Map());
   const [showCoord, setShowCoord] = useState(false);
   const [editingCoord, setEditingCoord] = useState<CoordCreneau | null>(null);
   const [coordForm, setCoordForm] = useState({
@@ -225,7 +234,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
       sessionStorage.removeItem('planning_chauffeur_filter');
     }
   }, []);
-  useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); }, [currentDate, view]);
+  useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); loadExecutions(); }, [currentDate, view]);
   // Changer de date ou de vue vide la selection : sinon des courses cochees puis
   // devenues INVISIBLES (autre periode) resteraient supprimables/reaffectables
   // en lot sans que l'utilisateur les voie.
@@ -236,7 +245,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
   // page. On garde une ref vers le rechargement pour ne PAS re-souscrire a chaque
   // navigation de date/vue, et on debounce pour absorber les rafales.
   const reloadAllRef = useRef<() => void>(() => {});
-  reloadAllRef.current = () => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); };
+  reloadAllRef.current = () => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); loadExecutions(); };
   useEffect(() => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRefresh = () => {
@@ -311,6 +320,38 @@ export function PlanningPage({ user }: PlanningPageProps) {
       if (data.length < pageSize) break;
     }
     setCourses(all);
+  }
+
+  // Heures reelles (course_executions) de la periode affichee. On filtre sur
+  // heure_debut : une execution commence toujours le jour de la course.
+  async function loadExecutions() {
+    const { from, to } = getDateRange();
+    const pageSize = 1000;
+    const all: Execution[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from('course_executions')
+        .select('course_id, heure_debut, heure_fin')
+        .gte('heure_debut', from)
+        .lt('heure_debut', to)
+        .order('heure_debut')
+        .range(offset, offset + pageSize - 1);
+      if (error || !data) break;
+      all.push(...(data as Execution[]));
+      if (data.length < pageSize) break;
+    }
+    const map = new Map<string, Execution>();
+    // Une course peut avoir plusieurs executions (redemarrage) : on garde la
+    // premiere heure de depart et la derniere heure d'arrivee connues.
+    all.forEach(e => {
+      const prev = map.get(e.course_id);
+      map.set(e.course_id, {
+        course_id: e.course_id,
+        heure_debut: prev?.heure_debut || e.heure_debut,
+        heure_fin: e.heure_fin || prev?.heure_fin || null,
+      });
+    });
+    setExecutions(map);
   }
 
   async function loadAstreintes() {
@@ -1404,6 +1445,39 @@ export function PlanningPage({ user }: PlanningPageProps) {
     return groups;
   }, [filteredChauffeurs, lineFilter]);
 
+  // Appariement course remplacee <-> course de remplacement. Le remplacement ne
+  // stocke aucun lien en base : il cree une seconde course au MEME horaire, sur
+  // le meme trajet, avec la note "[Remplacement]". On rapproche donc les deux
+  // par (horaire + trajet + ligne), ce qui suffit pour afficher "remplace par
+  // X" et "remplacement de Y" (demande de la direction).
+  const liensRemplacement = useMemo(() => {
+    const cle = (c: Course) => `${c.date_heure}|${c.depart}|${c.arrivee}|${c.ligne_id || ''}`;
+    const remplacantsParCle = new Map<string, Course[]>();
+    courses.forEach(c => {
+      if ((c.notes || '').startsWith('[Remplacement]')) {
+        const k = cle(c);
+        remplacantsParCle.set(k, [...(remplacantsParCle.get(k) || []), c]);
+      }
+    });
+    const remplacePar = new Map<string, string>();  // course remplacee -> chauffeur remplacant
+    const remplaceDe = new Map<string, string>();   // course de remplacement -> chauffeur remplace
+    courses.forEach(c => {
+      if ((c.statut_realisation || c.statut) !== 'remplace') return;
+      const candidats = remplacantsParCle.get(cle(c)) || [];
+      const rempl = candidats.find(r => r.chauffeur_id && r.chauffeur_id !== c.chauffeur_id);
+      if (rempl?.chauffeur_id) {
+        remplacePar.set(c.id, rempl.chauffeur_id);
+        if (c.chauffeur_id) remplaceDe.set(rempl.id, c.chauffeur_id);
+      }
+    });
+    return { remplacePar, remplaceDe };
+  }, [courses]);
+
+  const libelleChauffeur = (id: string | null | undefined) => {
+    const c = chauffeurs.find(x => x.id === id);
+    return c ? `${c.code} ${c.nom} ${c.prenom}`.trim() : '';
+  };
+
   function getCourseForChauffeur(chauffeurId: string, date?: Date): Course[] {
     return filteredCourses.filter(c => {
       if (c.chauffeur_id !== chauffeurId) return false;
@@ -1508,6 +1582,15 @@ export function PlanningPage({ user }: PlanningPageProps) {
               <button onClick={() => navigate(-1)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"><ChevronLeft className="w-4 h-4" /></button>
               <button onClick={goToday} className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">Aujourd'hui</button>
               <button onClick={() => navigate(1)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"><ChevronRight className="w-4 h-4" /></button>
+              {/* Choix direct d'une date dans le calendrier du navigateur : aller
+                  au 12 du mois prochain ne demande plus 40 clics sur la fleche. */}
+              <input
+                type="date"
+                value={mDateStr(currentDate)}
+                onChange={(e) => { if (e.target.value) setCurrentDate(mNoon(e.target.value)); }}
+                title="Aller a une date"
+                className="ml-1 px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-700 focus:ring-2 focus:ring-amber-500 outline-none"
+              />
             </div>
             <div>
               <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Planning {view === 'jour' ? 'Journee' : view === 'semaine' ? 'Semaine' : view === 'mois' ? 'Mois' : 'Liste'}</p>
@@ -2238,6 +2321,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
                   <tr>
                     <SortTh field="heure" label="Heure" />
                     <SortTh field="fin" label="Fin" />
+                    <th className="text-left px-3 py-2 font-semibold uppercase" title="Heure a laquelle le chauffeur a reellement demarre (appli chauffeur)">Depart reel</th>
+                    <th className="text-left px-3 py-2 font-semibold uppercase" title="Heure a laquelle le chauffeur a reellement termine (appli chauffeur)">Arrivee reelle</th>
                     <SortTh field="chauffeur" label="Chauffeur" />
                     <SortTh field="ligne" label="Ligne" />
                     <SortTh field="trajet" label="Trajet" />
@@ -2254,11 +2339,58 @@ export function PlanningPage({ user }: PlanningPageProps) {
                       <tr key={course.id} onClick={() => onCourseClick(course)} className={`cursor-pointer transition-colors ${selected ? 'bg-blue-50' : 'hover:bg-amber-50/40'}`}>
                         <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{fmtHM(course.date_heure)}</td>
                         <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtHM(new Date(new Date(course.date_heure).getTime() + (course.duree_minutes || 0) * 60000).toISOString())}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{ch ? `${ch.code} ${ch.nom} ${ch.prenom}` : <span className="text-amber-600 font-medium">Non affecte</span>}</td>
+                        {(() => {
+                          // Heures REELLES remontees par l'appli chauffeur. Le
+                          // depart est colore en orange s'il a plus de 10 min de
+                          // retard sur l'horaire prevu.
+                          const ex = executions.get(course.id);
+                          const retardMin = ex?.heure_debut
+                            ? Math.round((new Date(ex.heure_debut).getTime() - new Date(course.date_heure).getTime()) / 60000)
+                            : null;
+                          return (
+                            <>
+                              <td className={`px-3 py-2 whitespace-nowrap ${retardMin !== null && retardMin > 10 ? 'text-amber-600 font-medium' : 'text-gray-700'}`}
+                                  title={retardMin !== null ? `${retardMin >= 0 ? '+' : ''}${retardMin} min par rapport a l'horaire prevu` : ''}>
+                                {ex?.heure_debut ? fmtHM(ex.heure_debut) : <span className="text-gray-300">—</span>}
+                              </td>
+                              <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
+                                {ex?.heure_fin ? fmtHM(ex.heure_fin) : <span className="text-gray-300">—</span>}
+                              </td>
+                            </>
+                          );
+                        })()}
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {ch ? `${ch.code} ${ch.nom} ${ch.prenom}` : <span className="text-amber-600 font-medium">Non affecte</span>}
+                          {/* Qui remplace qui : demande de la direction. */}
+                          {liensRemplacement.remplacePar.has(course.id) && (
+                            <span className="block text-[10px] text-red-500" title="Ce trajet a ete repris par un remplacant">
+                              remplace par {libelleChauffeur(liensRemplacement.remplacePar.get(course.id))}
+                            </span>
+                          )}
+                          {liensRemplacement.remplaceDe.has(course.id) && (
+                            <span className="block text-[10px] text-amber-600" title="Trajet assure a la place d'un autre chauffeur">
+                              remplace {libelleChauffeur(liensRemplacement.remplaceDe.get(course.id))}
+                            </span>
+                          )}
+                          {!liensRemplacement.remplaceDe.has(course.id) && (course.notes || '').startsWith('[Remplacement]') && (
+                            <span className="block text-[10px] text-amber-600">remplacement</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">{li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}</td>
                         <td className="px-3 py-2 text-gray-700">{course.depart} → {course.arrivee}</td>
                         <td className="px-3 py-2 text-gray-500">{periodeLabels[course.periode] || course.periode}</td>
-                        <td className="px-3 py-2">{statutBadge(course)}</td>
+                        <td className="px-3 py-2">
+                          {statutBadge(course)}
+                          {/* Course demarree un jour passe et jamais cloturee par
+                              le chauffeur : elle resterait "en cours" pour
+                              toujours et ne serait pas facturee. */}
+                          {(course.statut_realisation === 'en_cours' || course.statut === 'en_cours')
+                            && !isSameDay(parseCourseDate(course.date_heure), new Date()) && (
+                            <span className="block text-[10px] text-red-500 font-medium" title="Le chauffeur a demarre ce trajet sans jamais le terminer : a cloturer a la main, sinon il n'est pas facture">
+                              jamais terminee
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -2268,7 +2400,32 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 <div className="p-8 text-center text-gray-400 text-sm">Aucune course ce jour</div>
               )}
             </div>
-            <p className="text-[10px] text-gray-400 mt-2">{jour.length} course(s) · {formatDateFr(currentDate)}</p>
+            {/* Compteurs du jour : prevus / realises / remplacements / non
+                effectues (demande "visualisation des courses qui remplacent"). */}
+            {(() => {
+              const estRemplacement = (c: Course) => (c.notes || '').startsWith('[Remplacement]');
+              const st = (c: Course) => c.statut_realisation || c.statut || '';
+              const prevus = jour.filter(c => !estRemplacement(c)).length;
+              const remplacements = jour.filter(estRemplacement).length;
+              const realises = jour.filter(c => st(c) === 'termine' || st(c) === 'terminee').length;
+              const nonEffectues = jour.filter(c => ['remplace', 'annule', 'annulee', 'incident', 'non_effectue'].includes(st(c))).length;
+              const jamaisTerminees = jour.filter(c => (st(c) === 'en_cours') && !isSameDay(parseCourseDate(c.date_heure), new Date())).length;
+              return (
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                  <span className="text-gray-500">{formatDateFr(currentDate)}</span>
+                  <span className="text-gray-800 font-semibold" title="Trajets programmes, hors trajets assures en remplacement">{prevus} prevu{prevus > 1 ? 's' : ''}</span>
+                  <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur">{remplacements} en remplacement</span>
+                  <span className="text-emerald-600" title="Trajets termines par le chauffeur">{realises} realise{realises > 1 ? 's' : ''}</span>
+                  <span className={nonEffectues > 0 ? 'text-red-500' : 'text-gray-400'} title="Annules, incidents, ou repris par un remplacant">{nonEffectues} non effectue{nonEffectues > 1 ? 's' : ''}</span>
+                  {jamaisTerminees > 0 && (
+                    <span className="text-red-600 font-medium" title="Trajets demarres un jour passe et jamais clotures par le chauffeur : a cloturer a la main, sinon ils ne sont pas factures">
+                      {jamaisTerminees} jamais terminee{jamaisTerminees > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  <span className="text-gray-400">· {jour.length} ligne{jour.length > 1 ? 's' : ''} affichee{jour.length > 1 ? 's' : ''}</span>
+                </div>
+              );
+            })()}
 
             {/* Astreintes et creneaux coordinateur du jour : ils n'apparaissaient
                 que dans les vues Jour/Semaine/Mois, jamais en vue Liste. */}

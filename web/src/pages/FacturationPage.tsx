@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { Receipt, Plus, X, ChevronLeft, ChevronRight, Eye, Check, Trash2, List, Columns3, Calendar, ChevronDown, ChevronUp, Download, Printer } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { mParts, mDateStr, mMidnightISO } from '../lib/mayotte';
+import { valeurTarif } from '../lib/tarifDefauts';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
 import { buildRecapMensuel, formatHeures, type RecapCourse, type RecapPlage } from '../lib/recapMensuel';
 import { RecapMensuelChauffeur, type RecapPied } from '../components/RecapMensuelChauffeur';
@@ -84,29 +85,63 @@ const STATUTS: { key: KanbanStatus; label: string; color: string; dotColor: stri
 
 const MONTHS_FR = ['Janvier', 'Fevrier', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Aout', 'Septembre', 'Octobre', 'Novembre', 'Decembre'];
 
+// On facture le mois ECOULE : en septembre, c'est aout qui est a facturer.
+// Le mois affiche est ensuite memorise pour la duree de la session, pour ne pas
+// avoir a revenir dessus a chaque aller-retour dans le menu ; une nouvelle
+// session repart sur le mois precedent.
+const MOIS_SESSION_KEY = 'facturation.mois';
+function moisPrecedent(): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+}
+function moisInitial(): string {
+  try {
+    const saved = sessionStorage.getItem(MOIS_SESSION_KEY);
+    if (saved && /^\d{4}-\d{2}$/.test(saved)) return saved;
+  } catch { /* stockage indisponible (navigation privee) : on prend le defaut */ }
+  return moisPrecedent();
+}
+
+// Tri d'affichage des chauffeurs : par ligne, puis par NUMERO de code
+// (D2 avant D10, ce qu'un tri alphabetique ne fait pas).
+function numeroCode(code: string): number {
+  const m = (code || '').match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : 9999;
+}
+function comparerChauffeurs(a: { code: string }, b: { code: string }): number {
+  const prefA = (a.code || '').replace(/\d+/g, '');
+  const prefB = (b.code || '').replace(/\d+/g, '');
+  return prefA.localeCompare(prefB) || numeroCode(a.code) - numeroCode(b.code) || a.code.localeCompare(b.code);
+}
+
 export function FacturationPage({ user }: FacturationPageProps) {
   const [factures, setFactures] = useState<Facture[]>([]);
   const [chauffeurs, setChauffeurs] = useState<Chauffeur[]>([]);
   const [tarifs, setTarifs] = useState<TarifFrais[]>([]);
+  const [lignes, setLignes] = useState<{ id: string; code: string; nom: string }[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
-  });
+  const [selectedMonth, setSelectedMonth] = useState(moisInitial);
+  useEffect(() => {
+    try { sessionStorage.setItem(MOIS_SESSION_KEY, selectedMonth); } catch { /* ignore */ }
+  }, [selectedMonth]);
   const [showForm, setShowForm] = useState(false);
   const [editingFacture, setEditingFacture] = useState<Facture | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
-    const [fRes, cRes, tRes] = await Promise.all([
+    const [fRes, cRes, tRes, lRes] = await Promise.all([
       supabase.from('factures').select('*').order('date_emission', { ascending: false }),
       supabase.from('chauffeurs').select('id, nom, prenom, code, telephone, email, nif_siret, adresse, vehicule_places, ligne_id').eq('statut', 'actif'),
       supabase.from('tarif_frais').select('cle, valeur, actif'),
+      supabase.from('lignes').select('id, code, nom').order('code'),
     ]);
     if (fRes.data) setFactures(fRes.data);
     if (cRes.data) setChauffeurs(cRes.data);
     if (tRes.data) setTarifs(tRes.data);
+    if (lRes.data) setLignes(lRes.data);
   }
 
   const [filterYear, filterMonth] = selectedMonth.split('-').map(Number);
@@ -308,6 +343,7 @@ export function FacturationPage({ user }: FacturationPageProps) {
           facture={editingFacture}
           chauffeurs={chauffeurs}
           tarifs={tarifs}
+          lignes={lignes}
           onClose={() => { setShowForm(false); setEditingFacture(null); }}
           onSaved={() => { setShowForm(false); setEditingFacture(null); loadAll(); }}
         />
@@ -321,6 +357,7 @@ interface FactureFormProps {
   facture: Facture | null;
   chauffeurs: Chauffeur[];
   tarifs: TarifFrais[];
+  lignes: { id: string; code: string; nom: string }[];
   onClose: () => void;
   onSaved: () => void;
 }
@@ -338,9 +375,10 @@ interface CourseDetail {
   categorie: string;
 }
 
-function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: FactureFormProps) {
+function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSaved }: FactureFormProps) {
   const [chauffeurId, setChauffeurId] = useState(facture?.chauffeur_id || '');
-  const [moisReference, setMoisReference] = useState(facture?.mois_reference || new Date().toISOString().slice(0, 7) + '-01');
+  // Nouvelle facture : mois precedent (on facture le mois ecoule).
+  const [moisReference, setMoisReference] = useState(facture?.mois_reference || `${moisPrecedent()}-01`);
   const [loading, setLoading] = useState(false);
   const [coursesDetail, setCoursesDetail] = useState<CourseDetail[]>([]);
   const [showListing, setShowListing] = useState(false);
@@ -498,7 +536,11 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
       const kmSeuil = tarifs.find(t => t.cle === 'seuil_km');
       const kmTarif = tarifs.find(t => t.cle === 'tarif_km_depassement');
       if (locationTarif) setTarifLocation(locationTarif.valeur);
-      if (fraisTarif) { setTarifFraisGestion(fraisTarif.valeur); setFraisGestion(fraisTarif.actif); }
+      // Le montant affiche dans Parametres > Tarifs n'est pas toujours enregistre
+      // en base : on retombe sur la meme valeur par defaut que cet ecran, sinon
+      // la facture proposait 0 alors que le tarif "prevu" affichait 30.
+      setTarifFraisGestion(valeurTarif(tarifs, 'frais_gestion'));
+      if (fraisTarif) setFraisGestion(fraisTarif.actif);
       if (kmSeuil) setSeuilKm(kmSeuil.valeur);
       if (kmTarif) setTarifKmDepassement(kmTarif.valeur);
       // Depot de garantie : inactif tant que la direction n'a pas saisi le
@@ -1035,9 +1077,29 @@ function FactureForm({ user, facture, chauffeurs, tarifs, onClose, onSaved }: Fa
           {/* Chauffeur selection */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <h3 className="text-xs font-bold text-gray-500 uppercase">Emetteur (Chauffeur)</h3>
+            {/* Chauffeurs groupes par ligne, puis tries par numero de code
+                (D2 avant D10) : demande "selectionner par ligne, puis dans
+                l'ordre des numeros". */}
             <select value={chauffeurId} onChange={(e) => setChauffeurId(e.target.value)} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
               <option value="">-- Selectionner un chauffeur --</option>
-              {chauffeurs.map(c => <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>)}
+              {lignes.map(l => {
+                const membres = chauffeurs.filter(c => c.ligne_id === l.id).sort(comparerChauffeurs);
+                if (membres.length === 0) return null;
+                return (
+                  <optgroup key={l.id} label={`${l.code} - ${l.nom}`}>
+                    {membres.map(c => <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>)}
+                  </optgroup>
+                );
+              })}
+              {(() => {
+                const sansLigne = chauffeurs.filter(c => !c.ligne_id || !lignes.some(l => l.id === c.ligne_id)).sort(comparerChauffeurs);
+                if (sansLigne.length === 0) return null;
+                return (
+                  <optgroup label="Sans ligne">
+                    {sansLigne.map(c => <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>)}
+                  </optgroup>
+                );
+              })()}
             </select>
             {selectedChauffeur && (
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600 bg-white rounded-lg p-3 border border-gray-100">
