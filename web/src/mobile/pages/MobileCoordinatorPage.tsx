@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
-import { LogOut, RefreshCw, ArrowLeft, Phone, Info, RotateCw } from 'lucide-react';
+import { LogOut, RefreshCw, ArrowLeft, Phone, Info, RotateCw, Contrast } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth, clearAuth } from '../lib/store';
 import type { Chauffeur, Incident } from '../lib/types';
@@ -40,6 +40,12 @@ interface Props {
 // tailles de la page sont en px (text-[10px]...) et ignorent donc le reglage de
 // police du systeme -> on applique un zoom CSS, memorise sur l'appareil.
 const TEXT_ZOOM_KEY = 'coord_text_zoom';
+// Mode contraste "blanc sur noir" demande pour un coordinateur malvoyant.
+// Toutes les couleurs de l'ecran sont des classes utilitaires : plutot que de
+// les redefinir une a une (et risquer d'en oublier), on inverse la page en CSS.
+// hue-rotate remet les couleurs d'accent (rouge des incidents, vert des courses
+// terminees) dans leur teinte d'origine apres l'inversion.
+const CONTRASTE_KEY = 'coord_contraste';
 const TEXT_ZOOM_MIN = 1;
 const TEXT_ZOOM_MAX = 1.6;
 
@@ -51,6 +57,16 @@ function loadTextZoom(): number {
 export default function MobileCoordinatorPage({ onNavigate }: Props) {
   const { chauffeur } = useAuth();
   const [textZoom, setTextZoom] = useState(loadTextZoom);
+  const [contraste, setContraste] = useState(() => {
+    try { return localStorage.getItem(CONTRASTE_KEY) === '1'; } catch { return false; }
+  });
+
+  const toggleContraste = () => {
+    setContraste(v => {
+      try { localStorage.setItem(CONTRASTE_KEY, v ? '0' : '1'); } catch { /* ignore */ }
+      return !v;
+    });
+  };
 
   const changeTextZoom = (delta: number) => {
     setTextZoom(z => {
@@ -61,7 +77,11 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   };
 
   // min-height compense le zoom (100vh zoome deborderait de l'ecran).
-  const zoomStyle = { zoom: textZoom, minHeight: `${100 / textZoom}vh` };
+  const zoomStyle = {
+    zoom: textZoom,
+    minHeight: `${100 / textZoom}vh`,
+    ...(contraste ? { filter: 'invert(1) hue-rotate(180deg)', backgroundColor: '#ffffff' } : {}),
+  };
   const [courses, setCourses] = useState<CourseWithChauffeur[]>([]);
   const [incidents, setIncidents] = useState<IncidentDetail[]>([]);
   const [loading, setLoading] = useState(true);
@@ -369,6 +389,7 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => changeTextZoom(-0.15)} disabled={textZoom <= TEXT_ZOOM_MIN} aria-label="Reduire le texte" className="px-2 py-1 rounded bg-white/10 font-bold text-xs disabled:opacity-40">A−</button>
             <button type="button" onClick={() => changeTextZoom(0.15)} disabled={textZoom >= TEXT_ZOOM_MAX} aria-label="Agrandir le texte" className="px-2 py-1 rounded bg-white/10 font-bold text-base disabled:opacity-40">A+</button>
+            <button type="button" onClick={toggleContraste} aria-label={contraste ? "Revenir a l'affichage normal" : "Passer en blanc sur noir"} title={contraste ? 'Affichage normal' : 'Blanc sur noir'} className={`p-2 rounded ${contraste ? 'bg-white/30' : 'bg-white/10'}`}><Contrast size={16} className="text-white" /></button>
             <button type="button" onClick={() => fetchAll()} className="p-2"><RefreshCw size={16} className="text-white" /></button>
             <button type="button" onClick={() => { clearAuth(); onNavigate('/mobile'); }} className="p-2"><LogOut size={16} className="text-white" /></button>
           </div>
