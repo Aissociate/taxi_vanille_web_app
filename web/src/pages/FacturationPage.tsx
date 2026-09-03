@@ -148,13 +148,30 @@ export function FacturationPage({ user }: FacturationPageProps) {
 
   const [filterYear, filterMonth] = selectedMonth.split('-').map(Number);
 
+  // Tri d'affichage : par ligne, puis par numero de chauffeur. L'ordre par date
+  // d'emission n'avait aucun sens des lors que toutes les factures d'un mois
+  // sont creees le meme jour (question "a quoi correspond l'ordre des factures").
   const filteredFactures = useMemo(() => {
-    return factures.filter(f => {
-      if (!f.mois_reference) return true;
-      const d = new Date(f.mois_reference);
-      return d.getFullYear() === filterYear && d.getMonth() + 1 === filterMonth;
-    });
-  }, [factures, filterYear, filterMonth]);
+    const rangLigne = (chId: string | null) => {
+      const ch = chauffeurs.find(c => c.id === chId);
+      const li = lignes.find(l => l.id === ch?.ligne_id);
+      return li ? li.code : '￿';   // sans ligne -> en dernier
+    };
+    return factures
+      .filter(f => {
+        if (!f.mois_reference) return true;
+        const d = new Date(f.mois_reference);
+        return d.getFullYear() === filterYear && d.getMonth() + 1 === filterMonth;
+      })
+      .sort((a, b) => {
+        const cmp = rangLigne(a.chauffeur_id).localeCompare(rangLigne(b.chauffeur_id));
+        if (cmp !== 0) return cmp;
+        const ca = chauffeurs.find(c => c.id === a.chauffeur_id);
+        const cb = chauffeurs.find(c => c.id === b.chauffeur_id);
+        if (ca && cb) return comparerChauffeurs(ca, cb);
+        return (ca ? 0 : 1) - (cb ? 0 : 1);
+      });
+  }, [factures, filterYear, filterMonth, chauffeurs, lignes]);
 
   const kanbanColumns = useMemo(() => {
     const cols: Record<KanbanStatus, Facture[]> = { brouillon: [], validee: [], payee: [] };
@@ -977,10 +994,13 @@ function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSav
       // Une facture existante ne se renumerote jamais.
       const prefixeFacture = (entreprise?.facture_prefixe as string) || '';
       const [numY, numM] = moisReference.slice(0, 7).split('-').map(Number);
+      // Numero lisible et reproductible : PREFIXE-ANNEE-MOIS-CODE CHAUFFEUR
+      // (ex. TV-2026-08-C5). Sans prefixe saisi dans Parametres > Entreprise on
+      // utilise "FACT". Avant, faute de prefixe, le numero etait tire au hasard
+      // (F2026-5336) : impossible de savoir a quoi il correspondait.
+      // Une facture existante n'est jamais renumerotee.
       const numero = facture?.numero
-        || (prefixeFacture
-          ? numeroFactureMarche(prefixeFacture, numY, numM, selectedChauffeur?.code || '')
-          : `F${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`);
+        || numeroFactureMarche(prefixeFacture || 'FACT', numY, numM, selectedChauffeur?.code || '');
       const payload = {
         numero,
         chauffeur_id: chauffeurId || null,
