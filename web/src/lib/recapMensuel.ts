@@ -25,6 +25,10 @@ export interface RecapCourse {
   is_astreinte: boolean | null;
   statut_planification: string | null;
   statut_realisation: string | null;
+  /** Facultatifs : servent au detail d'une journee ouverte depuis le recap. */
+  depart?: string | null;
+  arrivee?: string | null;
+  chauffeur_id?: string | null;
 }
 
 export interface RecapPlage {

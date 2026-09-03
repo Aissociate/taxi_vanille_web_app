@@ -5,10 +5,11 @@
 // reellement rencontrees dans le mois : chaque ligne de transport a sa propre
 // grille, on ne code donc aucune colonne en dur.
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Download, Printer, ChevronDown, ChevronUp } from 'lucide-react';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
-import { formatHeures, parseHeures, type RecapMensuel } from '../lib/recapMensuel';
+import { formatHeures, parseHeures, type RecapMensuel, type RecapCourse } from '../lib/recapMensuel';
+import { mDateStr, mParts } from '../lib/mayotte';
 
 /** Bloc du bas : le meme que sur le document de la DAF. */
 export interface RecapPied {
@@ -42,14 +43,36 @@ interface Props {
    * astreintes reellement faites.
    */
   onHeuresChange: (date: string, minutes: number | null) => void;
+  /**
+   * Trajets du mois : permet d'ouvrir le detail d'une journee en cliquant sur
+   * sa ligne (demande "pouvoir faire des allers-retours dans les trajets
+   * effectues en selectionnant le jour").
+   */
+  trajets?: RecapCourse[];
   readOnly?: boolean;
 }
 
 const eur = (n: number) => `${(Math.round(n * 100) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} EUR`;
 
-export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplementChange, onHeuresChange, readOnly }: Props) {
+export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplementChange, onHeuresChange, trajets, readOnly }: Props) {
   const [open, setOpen] = useState(false);
+  // Journee dont on affiche le detail des trajets (clic sur la ligne).
+  const [jourOuvert, setJourOuvert] = useState<string | null>(null);
   const { colonnes, jours, totaux } = recap;
+
+  const trajetsDuJour = (date: string) => (trajets || [])
+    .filter(t => mDateStr(t.date_heure) === date)
+    .sort((a, b) => a.date_heure.localeCompare(b.date_heure));
+
+  const libelleStatut = (t: RecapCourse) => {
+    const st = t.statut_realisation || '';
+    if (st === 'termine' || st === 'terminee') return { texte: 'Effectue', cls: 'bg-emerald-100 text-emerald-700' };
+    if (st === 'remplace') return { texte: 'Remplace', cls: 'bg-red-100 text-red-700' };
+    if (st === 'en_cours') return { texte: 'En cours', cls: 'bg-blue-100 text-blue-700' };
+    if (st === 'annule' || st === 'annulee') return { texte: 'Annule', cls: 'bg-red-100 text-red-700' };
+    if (st === 'incident') return { texte: 'Incident', cls: 'bg-orange-100 text-orange-700' };
+    return { texte: 'Programme', cls: 'bg-gray-100 text-gray-600' };
+  };
 
   const enTetes = [
     'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
@@ -211,8 +234,16 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {jours.map(j => (
-                  <tr key={j.date} className={`${j.isFerie ? 'bg-yellow-50/50' : j.jourSemaine >= 6 ? 'bg-blue-50/20' : ''} hover:bg-gray-50/60`}>
-                    <td className="px-2 py-1.5 font-medium text-gray-800">{j.libelle}</td>
+                  <Fragment key={j.date}>
+                  <tr className={`${j.isFerie ? 'bg-yellow-50/50' : j.jourSemaine >= 6 ? 'bg-blue-50/20' : ''} ${jourOuvert === j.date ? 'bg-amber-50' : ''} hover:bg-gray-50/60`}>
+                    <td
+                      className={`px-2 py-1.5 font-medium text-gray-800 ${trajets ? 'cursor-pointer hover:text-amber-700' : ''}`}
+                      onClick={() => { if (trajets) setJourOuvert(jourOuvert === j.date ? null : j.date); }}
+                      title={trajets ? 'Afficher les trajets de cette journee' : undefined}
+                    >
+                      {trajets && <span className="text-gray-400 mr-1">{jourOuvert === j.date ? '▾' : '▸'}</span>}
+                      {j.libelle}
+                    </td>
                     <td className="px-2 py-1.5 text-center text-gray-500">{j.jourSemaine}</td>
                     <td className="px-2 py-1.5 text-center">
                       <input
@@ -254,6 +285,48 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
                       />
                     </td>
                   </tr>
+                  {jourOuvert === j.date && trajets && (
+                    <tr className="bg-amber-50/40">
+                      <td colSpan={9 + colonnes.length + 2} className="px-3 py-2">
+                        {trajetsDuJour(j.date).length === 0 ? (
+                          <p className="text-[11px] text-gray-400 italic">Aucun trajet ce jour.</p>
+                        ) : (
+                          <table className="w-full text-[11px]">
+                            <thead className="text-gray-500 uppercase">
+                              <tr>
+                                <th className="text-left px-2 py-1 font-semibold">Heure</th>
+                                <th className="text-left px-2 py-1 font-semibold">Trajet</th>
+                                <th className="text-left px-2 py-1 font-semibold">Statut</th>
+                                <th className="text-right px-2 py-1 font-semibold">Valeur</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {trajetsDuJour(j.date).map(t => {
+                                const st = libelleStatut(t);
+                                const p = mParts(t.date_heure);
+                                const estEffectue = (t.statut_realisation || '') === 'termine' || (t.statut_realisation || '') === 'terminee';
+                                return (
+                                  <tr key={t.id} className="border-t border-amber-100/70">
+                                    <td className="px-2 py-1 font-mono text-gray-700">{String(p.h).padStart(2, '0')}:{String(p.mi).padStart(2, '0')}</td>
+                                    <td className="px-2 py-1 text-gray-700">
+                                      {t.depart || ''}{t.depart || t.arrivee ? ' → ' : ''}{t.arrivee || ''}
+                                      {t.is_astreinte && <span className="ml-1 text-[10px] px-1 rounded bg-gray-200 text-gray-600">astreinte</span>}
+                                      {t.statut_planification === 'non_planifie' && <span className="ml-1 text-[10px] px-1 rounded bg-blue-100 text-blue-700">non planifie</span>}
+                                    </td>
+                                    <td className="px-2 py-1"><span className={`px-1.5 py-0.5 rounded font-semibold ${st.cls}`}>{st.texte}</span></td>
+                                    <td className={`px-2 py-1 text-right ${estEffectue ? 'text-gray-800 font-semibold' : 'text-gray-300'}`}>
+                                      {estEffectue ? eur(t.montant || 0) : '—'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
               <tfoot className="bg-gray-100 font-bold text-gray-800">

@@ -9,6 +9,7 @@ import { buildRecapMensuel, formatHeures, type RecapCourse, type RecapPlage } fr
 import { RecapMensuelChauffeur, type RecapPied } from '../components/RecapMensuelChauffeur';
 import { DettesChauffeur, loadDettes, echeancesDuMois, type Dette } from '../components/DettesChauffeur';
 import { buildFactureHtml, numeroFactureMarche, printFacture, type FactureDoc } from '../lib/factureTemplate';
+import { RecapLigneMensuel } from '../components/RecapLigneMensuel';
 
 interface LigneSupp {
   libelle: string;
@@ -127,6 +128,7 @@ export function FacturationPage({ user }: FacturationPageProps) {
     try { sessionStorage.setItem(MOIS_SESSION_KEY, selectedMonth); } catch { /* ignore */ }
   }, [selectedMonth]);
   const [showForm, setShowForm] = useState(false);
+  const [showRecapLigne, setShowRecapLigne] = useState(false);
   const [editingFacture, setEditingFacture] = useState<Facture | null>(null);
 
   useEffect(() => { loadAll(); }, []);
@@ -225,6 +227,11 @@ export function FacturationPage({ user }: FacturationPageProps) {
               <List className="w-4 h-4" /> Liste
             </button>
           </div>
+          {/* Recap mensuel d'une ligne complete : un chauffeur par ligne du
+              tableau, cumuls du mois (demande DAF du 03/09). */}
+          <button onClick={() => setShowRecapLigne(true)} className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors">
+            <List className="w-4 h-4" /> Recap par ligne
+          </button>
           <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-medium transition-colors shadow-sm">
             <Plus className="w-4 h-4" /> Nouvelle facture
           </button>
@@ -334,6 +341,15 @@ export function FacturationPage({ user }: FacturationPageProps) {
             </table>
           )}
         </div>
+      )}
+
+      {showRecapLigne && (
+        <RecapLigneMensuel
+          lignes={lignes}
+          chauffeurs={chauffeurs}
+          mois={selectedMonth}
+          onClose={() => setShowRecapLigne(false)}
+        />
       )}
 
       {/* Form modal */}
@@ -689,7 +705,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSav
     // trajets planifies non effectues et les non planifies -> requete dediee.
     const [recapRes, creneauxRes, dettesRows, entRes] = await Promise.all([
       supabase.from('courses')
-        .select('id, date_heure, ligne_id, montant, is_astreinte, statut_planification, statut_realisation')
+        .select('id, date_heure, ligne_id, montant, is_astreinte, statut_planification, statut_realisation, depart, arrivee')
         .eq('chauffeur_id', chauffeurId)
         .gte('date_heure', debutInstant)
         .lt('date_heure', finInstant)
@@ -1270,6 +1286,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSav
                   titre={selectedChauffeur ? `${selectedChauffeur.code} ${selectedChauffeur.nom} ${selectedChauffeur.prenom}`.trim() : ''}
                   moisLabel={`${MONTHS_FR[recapM - 1]} ${recapY}`}
                   recap={recap}
+                  trajets={recapCourses}
                   pied={recapPied}
                   onComplementChange={(date, montant) => setComplementsGreve(prev => ({ ...prev, [date]: montant }))}
                   onHeuresChange={(date, minutes) => setHeuresAstreinte(prev => {

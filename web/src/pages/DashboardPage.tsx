@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { AlertTriangle, Volume2, RefreshCw, X, Download, TrendingUp, TrendingDown } from 'lucide-react';
+import { AlertTriangle, Volume2, RefreshCw, X, Download, TrendingUp, TrendingDown, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type PeriodMode = 'jour' | 'semaine' | 'mois';
 
@@ -39,6 +39,10 @@ interface Incident {
 
 export function DashboardPage() {
   const [period, setPeriod] = useState<PeriodMode>('semaine');
+  // Date d'ancrage : le tableau de bord n'etait figé que sur la periode EN COURS.
+  // On peut desormais reculer d'un jour / d'une semaine / d'un mois pour
+  // comparer deux periodes passees.
+  const [anchor, setAnchor] = useState<Date>(new Date());
   const [courses, setCourses] = useState<CourseRow[]>([]);
   const [prevCourses, setPrevCourses] = useState<CourseRow[]>([]);
   const [chauffeurs, setChauffeurs] = useState<ChauffeurRow[]>([]);
@@ -55,7 +59,7 @@ export function DashboardPage() {
   const now = new Date();
 
   const { periodStart, periodEnd, prevStart, prevEnd, periodLabel } = useMemo(() => {
-    const today = new Date();
+    const today = anchor;
     let ps: Date, pe: Date, prvS: Date, prvE: Date, label: string;
 
     if (period === 'jour') {
@@ -80,7 +84,24 @@ export function DashboardPage() {
       label = today.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Indian/Mayotte' });
     }
     return { periodStart: ps, periodEnd: pe, prevStart: prvS, prevEnd: prvE, periodLabel: label };
-  }, [period]);
+  }, [period, anchor]);
+
+  // Deplacement de la periode : un jour, une semaine ou un mois a la fois.
+  function decalerPeriode(sens: number) {
+    setAnchor(prev => {
+      const d = new Date(prev);
+      if (period === 'jour') d.setDate(d.getDate() + sens);
+      else if (period === 'semaine') d.setDate(d.getDate() + sens * 7);
+      else d.setMonth(d.getMonth() + sens);
+      return d;
+    });
+  }
+  const estPeriodeCourante = (() => {
+    const n = new Date();
+    if (period === 'jour') return anchor.toDateString() === n.toDateString();
+    if (period === 'mois') return anchor.getFullYear() === n.getFullYear() && anchor.getMonth() === n.getMonth();
+    return periodStart <= n && n <= periodEnd;
+  })();
 
   useEffect(() => {
     loadData();
@@ -350,6 +371,28 @@ export function DashboardPage() {
           <h1 className="page-title mt-1">Tableau de bord</h1>
         </div>
         <div className="flex items-center gap-2">
+          {/* Navigation dans le temps : comparer une semaine a la precedente,
+              ou revenir sur un mois clos. */}
+          <div className="flex items-center bg-white rounded-lg border border-gray-200">
+            <button onClick={() => decalerPeriode(-1)} title="Periode precedente" className="px-2 py-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-l-lg transition-colors">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <input
+              type="date"
+              value={`${anchor.getFullYear()}-${String(anchor.getMonth() + 1).padStart(2, '0')}-${String(anchor.getDate()).padStart(2, '0')}`}
+              onChange={(e) => { if (e.target.value) { const [y, m, d] = e.target.value.split('-').map(Number); setAnchor(new Date(y, m - 1, d)); } }}
+              title="Aller a une date"
+              className="px-2 py-1.5 text-xs text-gray-700 outline-none border-x border-gray-200"
+            />
+            <button onClick={() => decalerPeriode(1)} disabled={estPeriodeCourante} title="Periode suivante" className="px-2 py-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-50 disabled:text-gray-200 disabled:hover:bg-transparent rounded-r-lg transition-colors">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          {!estPeriodeCourante && (
+            <button onClick={() => setAnchor(new Date())} className="px-3 py-1.5 text-xs font-medium bg-white border border-gray-200 rounded-lg text-gray-600 hover:text-gray-900 transition-colors">
+              Aujourd'hui
+            </button>
+          )}
           <div className="flex items-center bg-white rounded-lg border border-gray-200 p-0.5">
             {(['jour', 'semaine', 'mois'] as PeriodMode[]).map(p => (
               <button
