@@ -1085,6 +1085,36 @@ export function PlanningPage({ user }: PlanningPageProps) {
     loadCoordCreneaux();
   }
 
+  // Cloture d'un trajet depuis le planning. La direction n'avait que le
+  // selecteur "Realisation" au fond du formulaire d'edition : un enregistrement
+  // sans y toucher ne changeait rien, d'ou le "on n'arrive pas a cloturer la
+  // course". Un bouton par ligne fait le travail en un clic.
+  const [terminatingId, setTerminatingId] = useState<string | null>(null);
+  async function terminerCourse(course: Course) {
+    setTerminatingId(course.id);
+    try {
+      const { error, count } = await supabase
+        .from('courses')
+        .update({ statut_realisation: 'termine', statut: 'terminee' }, { count: 'exact' })
+        .eq('id', course.id);
+      if (error) { alert(`Cloture impossible : ${error.message}`); return; }
+      if (!count) { alert('Cloture impossible : course introuvable ou droits insuffisants.'); return; }
+      const ch = chauffeurs.find(c => c.id === course.chauffeur_id);
+      await logAction('update', 'courses', course.id,
+        `Course cloturee depuis le planning: ${course.depart} → ${course.arrivee}${ch ? ` (${ch.code})` : ''}`,
+        { statut_realisation: course.statut_realisation } as unknown as Record<string, unknown>,
+        { statut_realisation: 'termine' });
+      loadCourses();
+    } finally {
+      setTerminatingId(null);
+    }
+  }
+
+  // Un trajet est cloturable tant qu'il n'est pas deja termine, remplace,
+  // annule, ni en brouillon.
+  const estCloturable = (c: Course) => !c.is_brouillon
+    && !['termine', 'terminee', 'remplace', 'annule', 'annulee', 'incident'].includes(c.statut_realisation || '');
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const payload = {
@@ -2328,6 +2358,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     <SortTh field="trajet" label="Trajet" />
                     <SortTh field="periode" label="Periode" />
                     <SortTh field="statut" label="Statut" />
+                    <th className="text-right px-3 py-2 font-semibold uppercase">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -2389,6 +2420,19 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             <span className="block text-[10px] text-red-500 font-medium" title="Le chauffeur a demarre ce trajet sans jamais le terminer : a cloturer a la main, sinon il n'est pas facture">
                               jamais terminee
                             </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {estCloturable(course) && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); terminerCourse(course); }}
+                              disabled={terminatingId === course.id}
+                              title="Passer ce trajet en termine (il entre alors dans la facturation)"
+                              className="px-2 py-1 rounded-lg border border-emerald-200 text-emerald-700 text-[11px] font-medium hover:bg-emerald-50 disabled:opacity-50 transition-colors whitespace-nowrap"
+                            >
+                              {terminatingId === course.id ? '...' : '✓ Terminer'}
+                            </button>
                           )}
                         </td>
                       </tr>

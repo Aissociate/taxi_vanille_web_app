@@ -10,6 +10,7 @@ import { Download, Printer, ChevronDown, ChevronUp } from 'lucide-react';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
 import { formatHeures, parseHeures, type RecapMensuel, type RecapCourse } from '../lib/recapMensuel';
 import { mDateStr, mParts } from '../lib/mayotte';
+import { buildRecapHtml, RECAP_STYLES } from '../lib/recapHtml';
 
 /** Bloc du bas : le meme que sur le document de la DAF. */
 export interface RecapPied {
@@ -135,49 +136,21 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
   }
 
   function exportPdf() {
-    const esc = (s: string | number) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
-    const head = `<tr>${enTetes.map(h => `<th>${esc(h)}</th>`).join('')}</tr>`;
-    const body = jours.map(j => `<tr${j.isFerie ? ' class="ferie"' : ''}>
-      <td>${esc(j.libelle)}</td><td>${esc(j.date)}</td><td class="c">${j.jourSemaine}</td>
-      <td class="c">${formatHeures(j.minutesAstreinte)}</td>
-      <td class="r">${j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
-      <td class="c">${j.planifies}</td><td class="c">${j.nonEffectues}</td>
-      <td class="c">${j.nonPlanifiesEffectues}</td><td class="c">${j.effectues}</td>
-      ${colonnes.map(c => `<td class="c">${j.parPlage[c.key] || 0}</td>`).join('')}
-      <td class="r">${eur(j.valeur)}</td><td class="r">${j.complementGreve ? eur(j.complementGreve) : ''}</td>
-    </tr>`).join('');
-    const tot = `<tr class="tot"><td colspan="3">TOTAL</td>
-      <td class="c">${formatHeures(totaux.minutesAstreinte)}</td>
-      <td class="r">${eur(totaux.valeurAstreinte)}</td>
-      <td class="c">${totaux.planifies}</td><td class="c">${totaux.nonEffectues}</td>
-      <td class="c">${totaux.nonPlanifiesEffectues}</td><td class="c">${totaux.effectues}</td>
-      ${colonnes.map(c => `<td class="c">${totaux.parPlage[c.key] || 0}</td>`).join('')}
-      <td class="r">${eur(totaux.valeur)}</td><td class="r">${eur(totaux.complementGreve)}</td></tr>`;
-    const piedRows = lignesPied().slice(1)
-      .map(r => `<tr><td>${esc(String(r[0]))}</td><td class="r">${typeof r[1] === 'number' ? r[1].toLocaleString('fr-FR') : esc(String(r[1] ?? ''))}</td></tr>`).join('');
-    const tarifs = colonnes.map(c => `${esc(c.libelle)} : ${c.tarif.toFixed(2)} EUR`).join(' &nbsp;|&nbsp; ');
-
-    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Recap ${esc(titre)} ${esc(moisLabel)}</title>
+    // Meme rendu que l'annexe de la facture (lib/recapHtml) : un seul endroit a
+    // maintenir pour les deux sorties papier.
+    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<title>Recap ${titre} ${moisLabel}</title>
 <style>
   @page { size: A4 landscape; margin: 10mm; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #111; }
-  h1 { font-size: 15px; margin: 0 0 2px; }
-  .sub { color: #4b5563; margin-bottom: 8px; }
-  .tarifs { background: #fef3c7; border: 1px solid #fcd34d; padding: 5px 8px; margin-bottom: 8px; font-size: 10px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { border: 1px solid #d1d5db; padding: 3px 5px; }
-  th { background: #f3f4f6; font-size: 9px; text-align: left; }
-  .c { text-align: center; } .r { text-align: right; white-space: nowrap; }
-  .ferie { background: #fffbeb; }
-  .tot td { font-weight: bold; background: #f3f4f6; }
-  .pied { margin-top: 14px; width: 340px; }
-  .pied tr:last-child td { background: #065f46; color: #fff; font-weight: bold; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; }
+${RECAP_STYLES}
 </style></head><body>
-<h1>Recap mensuel — ${esc(titre)}</h1>
-<div class="sub">${esc(moisLabel)}</div>
-<div class="tarifs"><b>Mode tarif trajet :</b> ${tarifs}</div>
-<table><thead>${head}</thead><tbody>${body}${tot}</tbody></table>
-<table class="pied"><tbody>${piedRows}</tbody></table>
+${buildRecapHtml({
+      titre,
+      moisLabel,
+      recap,
+      pied: lignesPied().slice(1).map(r => ({ libelle: String(r[0] ?? ''), valeur: (r[1] ?? '') as string | number })),
+    })}
 </body></html>`;
     const w = window.open('', '_blank');
     if (!w) { alert("Impossible d'ouvrir la fenetre d'impression (popup bloquee)."); return; }

@@ -204,6 +204,17 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
           <LogOut className="w-[18px] h-[18px]" />
           Deconnexion
         </button>
+        {/* Version affichee : permet de verifier en un coup d'oeil si le
+            navigateur montre la derniere mise en ligne ou une page en cache. */}
+        <p
+          className="px-3 pt-2 text-[10px] text-gray-600"
+          title="Date de mise en ligne de la version affichee. Si elle est ancienne, faites Ctrl+Maj+R pour vider le cache du navigateur."
+        >
+          Version du {new Date(__BUILD_DATE__).toLocaleString('fr-FR', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', timeZone: 'Indian/Mayotte',
+          })}
+        </p>
       </div>
     </aside>
   );

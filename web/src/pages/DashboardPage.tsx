@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
+import { StatsGraphiques } from '../components/StatsGraphiques';
 import { AlertTriangle, Volume2, RefreshCw, X, Download, TrendingUp, TrendingDown, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type PeriodMode = 'jour' | 'semaine' | 'mois';
@@ -14,6 +16,10 @@ interface CourseRow {
   duree_minutes: number | null;
   notes: string;
   ligne_id: string | null;
+  // Colonnes utilisees par les graphiques CADEMA (sens du trajet, usagers).
+  depart?: string | null;
+  passagers_depart?: number | null;
+  passagers_arrivee?: number | null;
 }
 
 interface ChauffeurRow {
@@ -113,7 +119,7 @@ export function DashboardPage() {
     try {
       const [cRes, prevRes, chRes, lRes, incRes, execRes, tpRes] = await Promise.all([
         supabase.from('courses')
-          .select('id, date_heure, statut_realisation, statut, chauffeur_id, montant, duree_minutes, notes, ligne_id')
+          .select('id, date_heure, statut_realisation, statut, chauffeur_id, montant, duree_minutes, notes, ligne_id, depart, passagers_depart, passagers_arrivee')
           .gte('date_heure', periodStart.toISOString())
           .lte('date_heure', periodEnd.toISOString()),
         supabase.from('courses')
@@ -121,7 +127,7 @@ export function DashboardPage() {
           .gte('date_heure', prevStart.toISOString())
           .lte('date_heure', prevEnd.toISOString()),
         supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id').eq('statut', 'actif'),
-        supabase.from('lignes').select('id, nom, code').eq('active', true),
+        supabase.from('lignes').select('id, nom, code, depart').eq('active', true),
         supabase.from('courses')
           .select('id, date_heure, chauffeur_id, notes')
           .eq('statut_realisation', 'incident')
@@ -326,6 +332,46 @@ export function DashboardPage() {
     ? completedExecs.reduce((s, e) => s + (new Date(e.heure_fin!).getTime() - new Date(e.heure_debut).getTime()) / 60000, 0) / completedExecs.length
     : -1;
 
+  // Export du tableau de bord : le bouton "Exporter" n'avait aucune action.
+  // On sort ce qui est affiche a l'ecran, pour la periode affichee.
+  function exporterTableauDeBord() {
+    const nf = (n: number) => Math.round(n * 100) / 100;
+    const synthese: CellValue[][] = [
+      ['Tableau de bord', periodLabel],
+      ['Periode', `${periodStart.toLocaleDateString('fr-FR')} au ${periodEnd.toLocaleDateString('fr-FR')}`],
+      ['Ligne', selectedLigne === 'all' ? 'Toutes' : (lignes.find(l => l.id === selectedLigne)?.nom || selectedLigne)],
+      [],
+      ['Indicateur', 'Valeur'],
+      ['Chiffre d affaires (EUR)', nf(ca)],
+      ['Courses realisees', nbCoursesRealisees],
+      ['Trajets theoriques', trajetsTheoriques],
+      ['Taux de realisation (%)', nf(tauxRealisation)],
+      ['Ponctualite (%)', ponctualite >= 0 ? nf(ponctualite) : ''],
+      [`Retards de plus de ${SEUIL_RETARD} min`, retards.length],
+      ['Incidents ouverts', incidentsOuverts.length],
+      ['Courses par jour', nf(voyMoyenParJour)],
+      ['Duree moyenne reelle (min)', avgRealDuration >= 0 ? nf(avgRealDuration) : ''],
+      ['Passagers montes', totalMontants],
+      ['Passagers descendus', totalDescendants],
+    ];
+    const evolution: CellValue[][] = [
+      [period === 'jour' ? 'Heure' : 'Jour', 'Chiffre d affaires (EUR)'],
+      ...chartData.map(d => [d.label, nf(d.montant)] as CellValue[]),
+    ];
+    const parChauffeur: CellValue[][] = [
+      ['Chauffeur', 'Courses realisees'],
+      ...trajetsParChauffeur.map(t => [
+        `${t.chauffeur?.code || ''} ${t.chauffeur?.nom || ''} ${t.chauffeur?.prenom || ''}`.trim(),
+        t.count,
+      ] as CellValue[]),
+    ];
+    downloadSpreadsheet(`Tableau_de_bord_${periodLabel.replace(/[^\w-]+/g, '_')}`, [
+      { name: 'Synthese', rows: synthese },
+      { name: 'Evolution', rows: evolution },
+      { name: 'Par chauffeur', rows: parChauffeur },
+    ]);
+  }
+
   const latestIncident = incidents[0];
   const latestIncidentChauffeur = latestIncident ? chauffeurs.find(c => c.id === latestIncident.chauffeur_id) : null;
 
@@ -408,7 +454,7 @@ export function DashboardPage() {
               </button>
             ))}
           </div>
-          <button className="btn-secondary !py-2 flex items-center gap-1.5">
+          <button onClick={exporterTableauDeBord} title="Telecharger la synthese, l'evolution et le detail par chauffeur au format Excel" className="btn-secondary !py-2 flex items-center gap-1.5">
             <Download className="w-3.5 h-3.5" /> Exporter
           </button>
         </div>
@@ -598,6 +644,15 @@ export function DashboardPage() {
             <StatCard label="Passagers montes" value={String(totalMontants)} sub="via app chauffeur" highlight={totalMontants > 0} />
             <StatCard label="Passagers descendus" value={String(totalDescendants)} sub="total arrets" />
           </div>
+
+          {/* Graphiques demandes par la CADEMA : ils suivent la periode et la
+              ligne selectionnees en haut de page. */}
+          <StatsGraphiques
+            courses={filteredCourses}
+            executions={executions}
+            lignes={lignes}
+            seuilMinutes={SEUIL_RETARD}
+          />
         </div>
       )}
     </div>

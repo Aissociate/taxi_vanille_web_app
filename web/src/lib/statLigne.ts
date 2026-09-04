@@ -207,7 +207,15 @@ function courseToBase(c: CourseRaw): Cellules {
   // colonne Chauffeur, repris dans l'export, et exploitable pour le tri.
   const chNom = `${c.chauffeurs?.nom || ''} ${c.chauffeurs?.prenom || ''}`.trim();
   cells.chauffeur = [c.chauffeurs?.code, chNom].filter(Boolean).join(' - ');
-  const nonEffectue = c.statut_realisation === 'annule' || c.statut_realisation === 'non_effectue';
+  // "Non effectue" est desormais DEDUIT du statut, sans avoir a cocher la case :
+  // un trajet annule ou en incident, mais aussi un trajet dont l'heure est
+  // passee et qui n'a jamais ete termine par le chauffeur (reste "programme" ou
+  // "en cours"). La case reste modifiable a la main : la saisie prend le pas.
+  const statut = c.statut_realisation || '';
+  const passe = new Date(c.date_heure).getTime() < Date.now();
+  const nonEffectue = statut === 'annule' || statut === 'annulee' || statut === 'non_effectue'
+    || statut === 'incident'
+    || (passe && statut !== 'termine' && statut !== 'terminee');
   cells.non_effectue = nonEffectue ? '1' : '0';
   cells.montees = String(c.passagers_depart ?? 0);
   cells.descentes = String(c.passagers_arrivee ?? 0);
@@ -247,6 +255,11 @@ async function fetchCoursesRange(ligneId: string, startISO: string, endISO: stri
       .from('courses')
       .select(COURSE_SELECT)
       .eq('ligne_id', ligneId)
+      // Un trajet REMPLACE fait double emploi avec la course du remplacant, qui
+      // porte les vraies donnees : on ne le liste plus.
+      // `or(is.null, neq)` et non `neq` seul : en SQL `colonne <> 'remplace'`
+      // vaut NULL (donc faux) quand la colonne est NULL.
+      .or('statut_realisation.is.null,statut_realisation.neq.remplace')
       .gte('date_heure', startISO)
       .lt('date_heure', endISO)
       .order('date_heure', { ascending: true })

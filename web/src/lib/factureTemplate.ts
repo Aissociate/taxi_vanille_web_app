@@ -54,6 +54,13 @@ export interface FactureDoc {
   montantFacture: number;
   montantCompensation: number;
   netARegler: number;
+  /**
+   * Annexe HTML imprimee a la suite de la facture (recap mensuel des
+   * prestations). La DAF veut un seul document : facture + justificatif.
+   */
+  annexeHtml?: string;
+  /** Styles de l'annexe, injectes dans l'entete du document. */
+  annexeStyles?: string;
 }
 
 /** "CADEMA-2026-07-C4" — numerotation du marche demandee par la DAF. */
@@ -108,6 +115,7 @@ export function buildFactureHtml(d: FactureDoc): string {
   .mentions .tva { font-weight: bold; }
   .foot { margin-top: 24px; font-size: 10px; color: #9ca3af; }
   @media print { body { padding: 0; } }
+  ${d.annexeStyles || ''}
 </style>
 </head><body><div class="wrap">
 
@@ -165,7 +173,9 @@ export function buildFactureHtml(d: FactureDoc): string {
   </div>
 
   <div class="foot">Document genere le ${new Date().toLocaleDateString('fr-FR')}.</div>
-</div></body></html>`;
+</div>
+${d.annexeHtml || ''}
+</body></html>`;
 }
 
 /** Ouvre la facture dans un onglet et lance l'impression (Enregistrer en PDF). */

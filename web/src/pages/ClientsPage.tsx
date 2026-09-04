@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { UserCircle, Plus, Search, Trash2, X, Phone, Mail, Building, TrendingUp, MapPin, Clock, DollarSign, ArrowLeft, FileText } from 'lucide-react';
+import { UserCircle, Plus, Search, Trash2, X, Phone, Mail, Building, TrendingUp, MapPin, Clock, DollarSign, ArrowLeft, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ReportWizard } from '../components/ReportWizard';
 import { mDateStr, mMidnightISO, mAddDaysStr, mMondayStr, mNoon } from '../lib/mayotte';
 import type { User } from '@supabase/supabase-js';
@@ -60,8 +60,10 @@ type Period = 'jour' | 'semaine' | 'mois';
 // Bornes [debut, fin[ de la periode, en heure de MAYOTTE et avec une BORNE HAUTE
 // (l'ancienne version n'avait qu'une borne basse -> "Aujourd'hui" comptait aussi
 // TOUT le futur : 4515 courses au lieu de ~329, trajets du 31 juillet inclus...).
-function getPeriodRange(period: Period): { start: number; end: number } {
-  const todayStr = mDateStr(new Date()); // 'YYYY-MM-DD' Mayotte
+function getPeriodRange(period: Period, ancre?: Date): { start: number; end: number } {
+  // `ancre` : jour de reference. Sans elle on restait bloque sur la periode en
+  // cours, donc impossible de consulter le mois precedent d'un client.
+  const todayStr = mDateStr(ancre || new Date()); // 'YYYY-MM-DD' Mayotte
   let startStr: string;
   let endStr: string;
   if (period === 'jour') {
@@ -92,6 +94,8 @@ export function ClientsPage({ user }: ClientsPageProps) {
   const [lignes, setLignes] = useState<Ligne[]>([]);
   const [search, setSearch] = useState('');
   const [period, setPeriod] = useState<Period>('mois');
+  // Jour d'ancrage de la periode affichee (par defaut aujourd'hui).
+  const [ancre, setAncre] = useState<Date>(new Date());
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showReportWizard, setShowReportWizard] = useState(false);
@@ -181,7 +185,26 @@ export function ClientsPage({ user }: ClientsPageProps) {
     `${c.nom} ${c.telephone} ${c.societe} ${c.contact1_nom} ${c.contact2_nom}`.toLowerCase().includes(search.toLowerCase())
   );
 
-  const periodRange = useMemo(() => getPeriodRange(period), [period]);
+  const periodRange = useMemo(() => getPeriodRange(period, ancre), [period, ancre]);
+
+  // Deplacement de la periode : un jour, une semaine ou un mois a la fois.
+  function decalerPeriode(sens: number) {
+    setAncre(prev => {
+      const d = new Date(prev);
+      if (period === 'jour') d.setDate(d.getDate() + sens);
+      else if (period === 'semaine') d.setDate(d.getDate() + sens * 7);
+      else d.setMonth(d.getMonth() + sens);
+      return d;
+    });
+  }
+  const periodeCourante = getPeriodRange(period).start === periodRange.start;
+  const libellePeriode = (() => {
+    const debut = new Date(periodRange.start);
+    if (period === 'jour') return debut.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Indian/Mayotte' });
+    if (period === 'mois') return debut.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Indian/Mayotte' });
+    const fin = new Date(periodRange.end - 86400000);
+    return `du ${debut.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', timeZone: 'Indian/Mayotte' })} au ${fin.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', timeZone: 'Indian/Mayotte' })}`;
+  })();
 
   const clientKpis = useMemo(() => {
     if (!selectedClient) return null;
@@ -271,17 +294,32 @@ export function ClientsPage({ user }: ClientsPageProps) {
           </div>
         )}
 
-        {/* Period selector */}
-        <div className="flex items-center gap-2">
+        {/* Periode : choix du pas ET navigation dans le temps (le mois precedent
+            d'un client etait inatteignable). */}
+        <div className="flex items-center gap-2 flex-wrap">
           {(['jour', 'semaine', 'mois'] as Period[]).map(p => (
             <button
               key={p}
               onClick={() => setPeriod(p)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${period === p ? 'bg-amber-600 text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
             >
-              {p === 'jour' ? 'Aujourd\'hui' : p === 'semaine' ? 'Cette semaine' : 'Ce mois'}
+              {p === 'jour' ? 'Jour' : p === 'semaine' ? 'Semaine' : 'Mois'}
             </button>
           ))}
+          <div className="flex items-center bg-white rounded-lg border border-gray-200 ml-1">
+            <button onClick={() => decalerPeriode(-1)} title="Periode precedente" className="px-2 py-2 text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-l-lg transition-colors">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="px-3 py-2 text-sm font-medium text-gray-700 capitalize whitespace-nowrap">{libellePeriode}</span>
+            <button onClick={() => decalerPeriode(1)} disabled={periodeCourante} title="Periode suivante" className="px-2 py-2 text-gray-500 hover:text-gray-900 hover:bg-gray-50 disabled:text-gray-200 disabled:hover:bg-transparent rounded-r-lg transition-colors">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          {!periodeCourante && (
+            <button onClick={() => setAncre(new Date())} className="px-3 py-2 text-sm font-medium bg-white border border-gray-200 rounded-lg text-gray-600 hover:text-gray-900 transition-colors">
+              Aujourd'hui
+            </button>
+          )}
         </div>
 
         {/* KPIs */}
@@ -345,7 +383,7 @@ export function ClientsPage({ user }: ClientsPageProps) {
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
               Les {Math.min(15, clientCourses.length)} plus recentes sur la periode selectionnee
-              ({period === 'jour' ? "aujourd'hui" : period === 'semaine' ? 'cette semaine' : 'ce mois'})
+              ({libellePeriode})
               {clientCourses.length > 15 ? ` — ${clientCourses.length} au total` : ''}
             </p>
           </div>

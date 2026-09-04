@@ -9,6 +9,7 @@ import { buildRecapMensuel, formatHeures, type RecapCourse, type RecapPlage } fr
 import { RecapMensuelChauffeur, type RecapPied } from '../components/RecapMensuelChauffeur';
 import { DettesChauffeur, loadDettes, echeancesDuMois, type Dette } from '../components/DettesChauffeur';
 import { buildFactureHtml, numeroFactureMarche, printFacture, type FactureDoc } from '../lib/factureTemplate';
+import { buildRecapHtml, RECAP_STYLES } from '../lib/recapHtml';
 import { RecapLigneMensuel } from '../components/RecapLigneMensuel';
 
 interface LigneSupp {
@@ -63,6 +64,7 @@ interface Chauffeur {
   adresse: string;
   vehicule_places: number;
   ligne_id: string | null;
+  statut?: string;
 }
 
 interface TarifFrais {
@@ -136,7 +138,10 @@ export function FacturationPage({ user }: FacturationPageProps) {
   async function loadAll() {
     const [fRes, cRes, tRes, lRes] = await Promise.all([
       supabase.from('factures').select('*').order('date_emission', { ascending: false }),
-      supabase.from('chauffeurs').select('id, nom, prenom, code, telephone, email, nif_siret, adresse, vehicule_places, ligne_id').eq('statut', 'actif'),
+      // TOUS les chauffeurs, pas seulement les actifs : en septembre on facture
+      // aout, et un chauffeur parti entre-temps (H2, H3...) doit rester
+      // facturable pour le mois qu'il a travaille.
+      supabase.from('chauffeurs').select('id, nom, prenom, code, telephone, email, nif_siret, adresse, vehicule_places, ligne_id, statut'),
       supabase.from('tarif_frais').select('cle, valeur, actif'),
       supabase.from('lignes').select('id, code, nom').order('code'),
     ]);
@@ -978,7 +983,18 @@ function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSav
   }
 
   function exportFacturePdf() {
-    if (!printFacture(buildFactureHtml(buildFactureDoc()))) {
+    // Un seul document : la facture, puis le recap mensuel jour par jour en
+    // annexe (demande DAF). Le recap part en paysage sur ses propres pages.
+    const doc = buildFactureDoc();
+    doc.annexeStyles = RECAP_STYLES;
+    doc.annexeHtml = buildRecapHtml({
+      titre: selectedChauffeur ? `${selectedChauffeur.code} ${selectedChauffeur.nom} ${selectedChauffeur.prenom}`.trim() : '',
+      moisLabel: `${MONTHS_FR[recapM - 1]} ${recapY}`,
+      recap,
+      pied: [],
+      sautDePage: true,
+    });
+    if (!printFacture(buildFactureHtml(doc))) {
       alert("Impossible d'ouvrir la fenetre d'impression (popup bloquee par le navigateur).");
     }
   }
@@ -1119,7 +1135,7 @@ function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSav
             <select value={chauffeurId} onChange={(e) => setChauffeurId(e.target.value)} className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
               <option value="">-- Selectionner un chauffeur --</option>
               {lignes.map(l => {
-                const membres = chauffeurs.filter(c => c.ligne_id === l.id).sort(comparerChauffeurs);
+                const membres = chauffeurs.filter(c => c.ligne_id === l.id && c.statut !== 'inactif').sort(comparerChauffeurs);
                 if (membres.length === 0) return null;
                 return (
                   <optgroup key={l.id} label={`${l.code} - ${l.nom}`}>
@@ -1128,11 +1144,22 @@ function FactureForm({ user, facture, chauffeurs, tarifs, lignes, onClose, onSav
                 );
               })}
               {(() => {
-                const sansLigne = chauffeurs.filter(c => !c.ligne_id || !lignes.some(l => l.id === c.ligne_id)).sort(comparerChauffeurs);
+                const sansLigne = chauffeurs.filter(c => c.statut !== 'inactif' && (!c.ligne_id || !lignes.some(l => l.id === c.ligne_id))).sort(comparerChauffeurs);
                 if (sansLigne.length === 0) return null;
                 return (
                   <optgroup label="Sans ligne">
                     {sansLigne.map(c => <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>)}
+                  </optgroup>
+                );
+              })()}
+              {(() => {
+                // Chauffeurs partis : ils restent facturables pour les mois
+                // qu'ils ont travailles, mais a part pour ne pas encombrer.
+                const anciens = chauffeurs.filter(c => c.statut === 'inactif').sort(comparerChauffeurs);
+                if (anciens.length === 0) return null;
+                return (
+                  <optgroup label="Anciens chauffeurs (inactifs)">
+                    {anciens.map(c => <option key={c.id} value={c.id}>{c.code} - {c.prenom} {c.nom}</option>)}
                   </optgroup>
                 );
               })()}
