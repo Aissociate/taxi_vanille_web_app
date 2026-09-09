@@ -162,7 +162,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
   const grandTotal: RecapTotaux = useMemo(() => {
     const vide: RecapTotaux = {
       minutesAstreinte: 0, minutesPlanifiees: 0, nbAstreintes: 0, valeurAstreinte: 0,
-      planifies: 0, nonEffectues: 0, nonPlanifiesEffectues: 0, effectues: 0,
+      planifies: 0, nonEffectues: 0, remplaces: 0, aCloturer: 0, nonPlanifiesEffectues: 0, effectues: 0,
       parPlage: {}, valeur: 0, complementGreve: 0,
     };
     return lignesRecap.reduce((acc, l) => {
@@ -175,6 +175,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
         valeurAstreinte: acc.valeurAstreinte + l.totaux.valeurAstreinte,
         planifies: acc.planifies + l.totaux.planifies,
         nonEffectues: acc.nonEffectues + l.totaux.nonEffectues,
+        remplaces: acc.remplaces + l.totaux.remplaces,
+        aCloturer: acc.aCloturer + l.totaux.aCloturer,
         nonPlanifiesEffectues: acc.nonPlanifiesEffectues + l.totaux.nonPlanifiesEffectues,
         effectues: acc.effectues + l.totaux.effectues,
         parPlage,
@@ -187,7 +189,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
   const ligne = lignes.find(l => l.id === ligneId);
   const enTetes = [
     'Chauffeur', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
-    'Non planifies effectues', 'Effectues',
+    'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
     ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
     'Valeur',
   ];
@@ -195,7 +197,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
   function exportExcelJours() {
     const enTetesJours = [
       'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
-      'Non planifies effectues', 'Effectues',
+      'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
       ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
       'Valeur',
     ];
@@ -204,7 +206,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       j.libelle.split(' ')[0], j.date, j.jourSemaine,
       formatHeures(j.minutesAstreinte),
       Math.round(j.valeurAstreinte * 100) / 100,
-      j.planifies, j.nonEffectues, j.nonPlanifiesEffectues, j.effectues,
+      j.planifies, j.nonEffectues, j.remplaces, j.aCloturer, j.nonPlanifiesEffectues, j.effectues,
       ...colonnes.map(c => j.parPlage[c.key] || 0),
       Math.round(j.valeur * 100) / 100,
     ]));
@@ -213,7 +215,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       'TOTAL', '', '',
       formatHeures(t.minutesAstreinte),
       Math.round(t.valeurAstreinte * 100) / 100,
-      t.planifies, t.nonEffectues, t.nonPlanifiesEffectues, t.effectues,
+      t.planifies, t.nonEffectues, t.remplaces, t.aCloturer, t.nonPlanifiesEffectues, t.effectues,
       ...colonnes.map(c => t.parPlage[c.key] || 0),
       Math.round(t.valeur * 100) / 100,
     ]);
@@ -230,7 +232,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       `${l.chauffeur.code} ${l.chauffeur.nom} ${l.chauffeur.prenom}`.trim(),
       formatHeures(l.totaux.minutesAstreinte),
       Math.round(l.totaux.valeurAstreinte * 100) / 100,
-      l.totaux.planifies, l.totaux.nonEffectues, l.totaux.nonPlanifiesEffectues, l.totaux.effectues,
+      l.totaux.planifies, l.totaux.nonEffectues, l.totaux.remplaces, l.totaux.aCloturer, l.totaux.nonPlanifiesEffectues, l.totaux.effectues,
       ...colonnes.map(c => l.totaux.parPlage[c.key] || 0),
       Math.round(l.totaux.valeur * 100) / 100,
     ]));
@@ -238,7 +240,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       `TOTAL (${lignesRecap.length} chauffeurs)`,
       formatHeures(grandTotal.minutesAstreinte),
       Math.round(grandTotal.valeurAstreinte * 100) / 100,
-      grandTotal.planifies, grandTotal.nonEffectues, grandTotal.nonPlanifiesEffectues, grandTotal.effectues,
+      grandTotal.planifies, grandTotal.nonEffectues, grandTotal.remplaces, grandTotal.aCloturer, grandTotal.nonPlanifiesEffectues, grandTotal.effectues,
       ...colonnes.map(c => grandTotal.parPlage[c.key] || 0),
       Math.round(grandTotal.valeur * 100) / 100,
     ]);
@@ -309,7 +311,9 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <th className="px-2 py-2 text-center font-semibold" title="Heures d'astreinte de tous les chauffeurs de la ligne">H. astreinte</th>
                     <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
                     <th className="px-2 py-2 text-center font-semibold">Planifies</th>
-                    <th className="px-2 py-2 text-center font-semibold" title="Trajets planifies non payes ce jour-la (non termines, y compris repris par un remplacant)">Non effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets programmes jamais partis, non remplaces (ou annules / en incident)">Non effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets repris par un remplacant : assures, mais pas par ce chauffeur">Remplaces</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets demarres et jamais clotures : ils ont eu lieu, mais ils ne sont pas payes tant qu'ils ne sont pas clotures">A cloturer</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets effectues sans avoir ete planifies">Non planif. effectues</th>
                     <th className="px-2 py-2 text-center font-semibold">Effectues</th>
                     {colonnes.map(c => (
@@ -329,7 +333,9 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                       <td className="px-2 py-1.5 text-center font-mono text-gray-600">{formatHeures(j.minutesAstreinte)}</td>
                       <td className="px-2 py-1.5 text-right text-gray-700">{j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
                       <td className="px-2 py-1.5 text-center text-gray-700">{j.planifies || ''}</td>
-                      <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{j.nonEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-red-600 font-semibold' : 'text-gray-300'}`}>{j.nonEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.remplaces > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{j.remplaces || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.aCloturer > 0 ? 'text-orange-600 font-semibold' : 'text-gray-300'}`}>{j.aCloturer || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${j.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{j.nonPlanifiesEffectues || ''}</td>
                       <td className="px-2 py-1.5 text-center font-semibold text-gray-900">{j.effectues || ''}</td>
                       {colonnes.map(c => (
@@ -347,6 +353,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <td className="px-2 py-2 text-right">{eur(recapLigne.totaux.valeurAstreinte)}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.planifies}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.nonEffectues}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.remplaces}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.aCloturer}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.nonPlanifiesEffectues}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.effectues}</td>
                     {colonnes.map(c => (
@@ -368,7 +376,9 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <th className="px-2 py-2 text-center font-semibold">H. astreinte</th>
                     <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
                     <th className="px-2 py-2 text-center font-semibold">Planifies</th>
-                    <th className="px-2 py-2 text-center font-semibold">Non effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets programmes jamais partis, non remplaces (ou annules / en incident)">Non effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets repris par un remplacant">Remplaces</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets demarres et jamais clotures : non payes tant qu'ils ne le sont pas">A cloturer</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets effectues sans avoir ete planifies">Non planif. effectues</th>
                     <th className="px-2 py-2 text-center font-semibold">Effectues</th>
                     {colonnes.map(c => (
@@ -390,7 +400,9 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                       <td className="px-2 py-1.5 text-center font-mono text-gray-600">{formatHeures(t.minutesAstreinte)}</td>
                       <td className="px-2 py-1.5 text-right text-gray-700">{t.valeurAstreinte ? eur(t.valeurAstreinte) : ''}</td>
                       <td className="px-2 py-1.5 text-center text-gray-700">{t.planifies || ''}</td>
-                      <td className={`px-2 py-1.5 text-center ${t.nonEffectues > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{t.nonEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${t.nonEffectues > 0 ? 'text-red-600 font-semibold' : 'text-gray-300'}`}>{t.nonEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${t.remplaces > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{t.remplaces || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${t.aCloturer > 0 ? 'text-orange-600 font-semibold' : 'text-gray-300'}`}>{t.aCloturer || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${t.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{t.nonPlanifiesEffectues || ''}</td>
                       <td className="px-2 py-1.5 text-center font-semibold text-gray-900">{t.effectues || ''}</td>
                       {colonnes.map(c => (
@@ -407,6 +419,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <td className="px-2 py-2 text-right">{eur(grandTotal.valeurAstreinte)}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.planifies}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.nonEffectues}</td>
+                    <td className="px-2 py-2 text-center">{grandTotal.remplaces}</td>
+                    <td className="px-2 py-2 text-center">{grandTotal.aCloturer}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.nonPlanifiesEffectues}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.effectues}</td>
                     {colonnes.map(c => (
@@ -419,8 +433,9 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
             </div>
           )}
           <p className="text-[10px] text-gray-400 mt-3">
-            Valeur = somme des montants des trajets realises + astreinte du mois, exactement comme le recap
-            individuel de chaque chauffeur. Les colonnes de droite comptent les trajets realises par plage tarifaire.
+            Valeur = somme des montants des trajets TERMINES + astreinte du mois, exactement comme le recap
+            individuel de chaque chauffeur : c'est ce qui est paye. Un trajet remplace, ou reste a cloturer, n'y entre pas.
+            Les colonnes de droite comptent les trajets termines par plage tarifaire.
           </p>
         </div>
       </div>

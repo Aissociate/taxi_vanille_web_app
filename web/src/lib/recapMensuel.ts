@@ -16,6 +16,7 @@
 // par astreinte realisee.
 
 import { mParts, mDateStr } from './mayotte';
+import { etatTrajet } from './statutCourse';
 
 export interface RecapCourse {
   id: string;
@@ -80,8 +81,14 @@ export interface RecapJour {
   nbAstreintes: number;       // nombre de sessions confirmees par le chauffeur
   valeurAstreinte: number;    // EUR : heures retenues x tarif horaire
   planifies: number;
+  /** Programmes, jamais partis, non remplaces (+ annules / incidents). */
   nonEffectues: number;
+  /** Repris par un remplacant : assures, mais pas par ce chauffeur. */
+  remplaces: number;
+  /** Demarres et jamais clotures : le trajet a eu lieu, mais il n'est PAS paye. */
+  aCloturer: number;
   nonPlanifiesEffectues: number;
+  /** Trajets TERMINES, c'est-a-dire payes : c'est la base de la colonne Valeur. */
   effectues: number;
   parPlage: Record<string, number>;  // key de colonne -> nb de trajets realises
   valeur: number;             // EUR : courses realisees + forfait astreintes
@@ -95,6 +102,8 @@ export interface RecapTotaux {
   valeurAstreinte: number;
   planifies: number;
   nonEffectues: number;
+  remplaces: number;
+  aCloturer: number;
   nonPlanifiesEffectues: number;
   effectues: number;
   parPlage: Record<string, number>;
@@ -215,13 +224,26 @@ export function buildRecapMensuel(params: {
     const dayCreneaux = creneauxParJour.get(date) || [];
 
     const parPlage: Record<string, number> = {};
-    let planifies = 0, nonEffectues = 0, nonPlanifiesEffectues = 0, effectues = 0, valeur = 0;
+    let planifies = 0, nonEffectues = 0, remplaces = 0, aCloturer = 0;
+    let nonPlanifiesEffectues = 0, effectues = 0, valeur = 0;
 
     dayCourses.forEach(c => {
       const estPlanifie = c.statut_planification !== 'non_planifie';
       const estRealise = c.statut_realisation === 'termine';
       if (estPlanifie) planifies++;
-      if (estPlanifie && !estRealise) nonEffectues++;
+      // Meme vocabulaire que le planning et le tableau de bord
+      // (lib/statutCourse) : un trajet remplace et un trajet demarre mais non
+      // cloture ne sont plus noyes dans "non effectues". La colonne Valeur, elle,
+      // ne compte QUE les trajets termines : c'est ce qui est paye, et c'est ce
+      // qui doit reconcilier au centime avec la facture.
+      if (estPlanifie && !estRealise) {
+        switch (etatTrajet({ date_heure: c.date_heure, statut_realisation: c.statut_realisation })) {
+          case 'remplace': remplaces++; break;
+          case 'demarre': aCloturer++; break;
+          case 'a_venir': break;                 // l'heure n'est pas passee
+          default: nonEffectues++; break;
+        }
+      }
       if (!estPlanifie && estRealise) nonPlanifiesEffectues++;
       if (!estRealise) return;
 
@@ -259,6 +281,8 @@ export function buildRecapMensuel(params: {
       valeurAstreinte,
       planifies,
       nonEffectues,
+      remplaces,
+      aCloturer,
       nonPlanifiesEffectues,
       effectues,
       parPlage,
@@ -271,7 +295,7 @@ export function buildRecapMensuel(params: {
 
   const totaux: RecapTotaux = {
     minutesAstreinte: 0, minutesPlanifiees: 0, nbAstreintes: 0, valeurAstreinte: 0,
-    planifies: 0, nonEffectues: 0,
+    planifies: 0, nonEffectues: 0, remplaces: 0, aCloturer: 0,
     nonPlanifiesEffectues: 0, effectues: 0, parPlage: {}, valeur: 0, complementGreve: 0,
   };
   jours.forEach(j => {
@@ -281,6 +305,8 @@ export function buildRecapMensuel(params: {
     totaux.valeurAstreinte += j.valeurAstreinte;
     totaux.planifies += j.planifies;
     totaux.nonEffectues += j.nonEffectues;
+    totaux.remplaces += j.remplaces;
+    totaux.aCloturer += j.aCloturer;
     totaux.nonPlanifiesEffectues += j.nonPlanifiesEffectues;
     totaux.effectues += j.effectues;
     totaux.valeur += j.valeur;

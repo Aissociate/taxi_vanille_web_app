@@ -50,7 +50,7 @@ export function buildRecapHtml(params: {
 
   const enTetes = [
     'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte', 'Planifies', 'Non effectues',
-    'Non planifies effectues', 'Effectues',
+    'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
     ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
     'Valeur', 'Compl. greve',
   ];
@@ -61,6 +61,7 @@ export function buildRecapHtml(params: {
     <td class="c">${formatHeures(j.minutesAstreinte)}</td>
     <td class="r">${j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
     <td class="c">${j.planifies}</td><td class="c">${j.nonEffectues}</td>
+    <td class="c">${j.remplaces}</td><td class="c">${j.aCloturer}</td>
     <td class="c">${j.nonPlanifiesEffectues}</td><td class="c">${j.effectues}</td>
     ${colonnes.map(c => `<td class="c">${j.parPlage[c.key] || 0}</td>`).join('')}
     <td class="r">${eur(j.valeur)}</td><td class="r">${j.complementGreve ? eur(j.complementGreve) : ''}</td>
@@ -70,6 +71,7 @@ export function buildRecapHtml(params: {
     <td class="c">${formatHeures(totaux.minutesAstreinte)}</td>
     <td class="r">${eur(totaux.valeurAstreinte)}</td>
     <td class="c">${totaux.planifies}</td><td class="c">${totaux.nonEffectues}</td>
+    <td class="c">${totaux.remplaces}</td><td class="c">${totaux.aCloturer}</td>
     <td class="c">${totaux.nonPlanifiesEffectues}</td><td class="c">${totaux.effectues}</td>
     ${colonnes.map(c => `<td class="c">${totaux.parPlage[c.key] || 0}</td>`).join('')}
     <td class="r">${eur(totaux.valeur)}</td><td class="r">${eur(totaux.complementGreve)}</td></tr>`;
