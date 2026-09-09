@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
 import { StatsGraphiques } from '../components/StatsGraphiques';
+import { compterTrajets } from '../lib/statutCourse';
 import { AlertTriangle, Volume2, RefreshCw, X, Download, TrendingUp, TrendingDown, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type PeriodMode = 'jour' | 'semaine' | 'mois';
@@ -207,11 +208,11 @@ export function DashboardPage() {
 
   const coursesRealisees = filteredCourses.filter(c => c.statut_realisation === 'termine');
   const prevCoursesRealisees = filteredPrevCourses.filter(c => c.statut_realisation === 'termine');
-  const coursesNonEffectuees = filteredCourses.filter(c =>
-    c.statut_realisation === 'incident' ||
-    c.statut_realisation === 'annule' ||
-    c.statut_realisation === 'remplace'
-  );
+  // Definitions communes a toute l'application (lib/statutCourse) : un trajet
+  // REMPLACE a bien ete assure par le remplacant, il n'est pas "non effectue".
+  // Compter les remplaces ici affichait 19 trajets manquants sur la L4 le 04/09
+  // alors qu'il n'y en avait qu'un seul.
+  const comptes = compterTrajets(filteredCourses);
 
   const ca = coursesRealisees.reduce((s, c) => s + tarifForCourse(c), 0);
   const prevCa = prevCoursesRealisees.reduce((s, c) => s + tarifForCourse(c), 0);
@@ -633,7 +634,7 @@ export function DashboardPage() {
 
           {/* Bottom stats row */}
           <div className="grid grid-cols-3 lg:grid-cols-6 gap-4">
-            <StatCard label="Trajets theoriques" value={String(trajetsTheoriques)} sub={`- ${coursesNonEffectuees.length} non eff.`} />
+            <StatCard label="Trajets planifies" value={String(comptes.planifies)} sub={`${comptes.nonEffectues} non effectue(s) · ${comptes.remplaces} remplace(s)`} />
             <StatCard label="Taux realisation" value={`${tauxRealisation.toFixed(1)}%`} sub="objectif 95%" highlight={tauxRealisation >= 95} />
             <StatCard
               label="Duree moy. reelle"

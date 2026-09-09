@@ -16,6 +16,7 @@
 
 import { useMemo } from 'react';
 import { mParts, mDateStr } from '../lib/mayotte';
+import { etatTrajet } from '../lib/statutCourse';
 
 export interface StatCourse {
   id: string;
@@ -216,15 +217,13 @@ export function StatsGraphiques({ courses, executions, lignes, capacite = 8, seu
     return m;
   }, [executions]);
 
-  const estEffectue = (c: StatCourse) => (c.statut_realisation || c.statut) === 'termine'
-    || (c.statut_realisation || c.statut) === 'terminee';
-  // Non effectue = annule / incident / repris par un remplacant, ou passe sans
-  // avoir jamais ete termine (memes regles que le planning et les stats ligne).
-  const estNonEffectue = (c: StatCourse) => {
-    const st = c.statut_realisation || c.statut || '';
-    if (['annule', 'annulee', 'incident', 'non_effectue', 'remplace'].includes(st)) return true;
-    return new Date(c.date_heure).getTime() < Date.now() && !estEffectue(c);
+  // Definitions communes (lib/statutCourse) : un trajet demarre mais jamais
+  // cloture a bien eu lieu, un trajet remplace a ete assure par le remplacant.
+  const estEffectue = (c: StatCourse) => {
+    const e = etatTrajet(c);
+    return e === 'effectue' || e === 'demarre';
   };
+  const estNonEffectue = (c: StatCourse) => etatTrajet(c) === 'non_effectue';
 
   // 1 - effectues / non effectues par jour de la semaine
   const parJourSemaine = useMemo(() => {

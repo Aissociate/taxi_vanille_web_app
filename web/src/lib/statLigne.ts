@@ -9,6 +9,7 @@
 //    chauffeurs ; seules les cellules saisies gardent la valeur editee.
 //  - Si pas de donnee source -> 0 / vide, et tout reste editable.
 import { supabase } from './supabase';
+import { etatTrajet } from './statutCourse';
 import { mDateStr, mMidnightISO, mAddDaysStr, mParts, fmtHM } from './mayotte';
 
 export interface LigneLite {
@@ -207,15 +208,16 @@ function courseToBase(c: CourseRaw): Cellules {
   // colonne Chauffeur, repris dans l'export, et exploitable pour le tri.
   const chNom = `${c.chauffeurs?.nom || ''} ${c.chauffeurs?.prenom || ''}`.trim();
   cells.chauffeur = [c.chauffeurs?.code, chNom].filter(Boolean).join(' - ');
-  // "Non effectue" est desormais DEDUIT du statut, sans avoir a cocher la case :
-  // un trajet annule ou en incident, mais aussi un trajet dont l'heure est
-  // passee et qui n'a jamais ete termine par le chauffeur (reste "programme" ou
-  // "en cours"). La case reste modifiable a la main : la saisie prend le pas.
-  const statut = c.statut_realisation || '';
-  const passe = new Date(c.date_heure).getTime() < Date.now();
-  const nonEffectue = statut === 'annule' || statut === 'annulee' || statut === 'non_effectue'
-    || statut === 'incident'
-    || (passe && statut !== 'termine' && statut !== 'terminee');
+  // "Non effectue" est DEDUIT du statut, sans avoir a cocher la case, avec les
+  // definitions communes (lib/statutCourse) : annule, en incident, ou passe
+  // sans jamais etre parti. Un trajet DEMARRE mais jamais cloture a bien eu
+  // lieu : il n'est pas compte non effectue (le trajet de 16h40 de C3 le 07/09,
+  // parti a 16h35, sortait a tort en non effectue). La case reste modifiable a
+  // la main : la saisie prend le pas.
+  const nonEffectue = etatTrajet({
+    date_heure: c.date_heure,
+    statut_realisation: c.statut_realisation,
+  }) === 'non_effectue';
   cells.non_effectue = nonEffectue ? '1' : '0';
   cells.montees = String(c.passagers_depart ?? 0);
   cells.descentes = String(c.passagers_arrivee ?? 0);

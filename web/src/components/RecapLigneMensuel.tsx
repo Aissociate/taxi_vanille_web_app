@@ -1,5 +1,8 @@
-// Recapitulatif mensuel d'une LIGNE : une ligne du tableau par chauffeur, les
-// memes colonnes que le recap individuel, et les cumuls du mois en donnee.
+// Recapitulatif mensuel d'une LIGNE, en deux lectures :
+//   - PAR CHAUFFEUR : une ligne du tableau par chauffeur, cumuls du mois ;
+//   - PAR JOURNEE : une ligne du tableau par jour du mois, tous les chauffeurs
+//     de la ligne cumules (demande du 08/09/2026).
+// Dans les deux cas, les colonnes sont celles du recap individuel.
 //
 // Demandes DAF du 03/09/2026 :
 //   - "Pouvoir avoir le tableau mensuel par chauffeur en recapitulatif pour une
@@ -42,6 +45,7 @@ interface LigneRecap {
 
 export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) {
   const [ligneId, setLigneId] = useState<string>(lignes[0]?.id || '');
+  const [mode, setMode] = useState<'chauffeur' | 'jour'>('chauffeur');
   const [moisSel, setMoisSel] = useState(mois);
   const [loading, setLoading] = useState(false);
   const [courses, setCourses] = useState<RecapCourse[]>([]);
@@ -134,6 +138,16 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
     annee, mois: moisNum, courses, plages, feries, sessions: [], creneaux: [], tarifHeureAstreinte,
   }).colonnes, [annee, moisNum, courses, plages, feries, tarifHeureAstreinte]);
 
+  // Vue PAR JOURNEE : un seul recap, alimente par TOUTES les courses, toutes
+  // les astreintes et toutes les sessions de la ligne. Les jours du mois en
+  // sortent deja cumules, avec les memes colonnes que le recap individuel.
+  const recapLigne = useMemo(() => buildRecapMensuel({
+    annee, mois: moisNum, courses, plages, feries,
+    sessions: sessions.map(s2 => ({ date: s2.date })),
+    creneaux: creneaux.map(c => ({ date_debut: c.date_debut, date_fin: c.date_fin })),
+    tarifHeureAstreinte,
+  }), [annee, moisNum, courses, plages, feries, sessions, creneaux, tarifHeureAstreinte]);
+
   const lignesRecap: LigneRecap[] = useMemo(() => membres.map(ch => {
     const sien = courses.filter(c => c.chauffeur_id === ch.id);
     const recap = buildRecapMensuel({
@@ -178,7 +192,39 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
     'Valeur',
   ];
 
+  function exportExcelJours() {
+    const enTetesJours = [
+      'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
+      'Non planifies effectues', 'Effectues',
+      ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
+      'Valeur',
+    ];
+    const rows: CellValue[][] = [enTetesJours];
+    recapLigne.jours.forEach(j => rows.push([
+      j.libelle.split(' ')[0], j.date, j.jourSemaine,
+      formatHeures(j.minutesAstreinte),
+      Math.round(j.valeurAstreinte * 100) / 100,
+      j.planifies, j.nonEffectues, j.nonPlanifiesEffectues, j.effectues,
+      ...colonnes.map(c => j.parPlage[c.key] || 0),
+      Math.round(j.valeur * 100) / 100,
+    ]));
+    const t = recapLigne.totaux;
+    rows.push([
+      'TOTAL', '', '',
+      formatHeures(t.minutesAstreinte),
+      Math.round(t.valeurAstreinte * 100) / 100,
+      t.planifies, t.nonEffectues, t.nonPlanifiesEffectues, t.effectues,
+      ...colonnes.map(c => t.parPlage[c.key] || 0),
+      Math.round(t.valeur * 100) / 100,
+    ]);
+    downloadSpreadsheet(
+      `Recap_${ligne?.code || 'ligne'}_par_jour_${MOIS_FR[moisNum - 1]}_${annee}`,
+      [{ name: 'Recap ligne par jour', rows }],
+    );
+  }
+
   function exportExcel() {
+    if (mode === 'jour') { exportExcelJours(); return; }
     const rows: CellValue[][] = [enTetes];
     lignesRecap.forEach(l => rows.push([
       `${l.chauffeur.code} ${l.chauffeur.nom} ${l.chauffeur.prenom}`.trim(),
@@ -213,6 +259,18 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex border border-gray-200 rounded-lg overflow-hidden">
+              {([['chauffeur', 'Par chauffeur'], ['jour', 'Par journee']] as const).map(([cle, lib]) => (
+                <button
+                  key={cle}
+                  type="button"
+                  onClick={() => setMode(cle)}
+                  className={`px-3 py-2 text-sm font-medium transition-colors ${mode === cle ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                >
+                  {lib}
+                </button>
+              ))}
+            </div>
             <select
               value={ligneId}
               onChange={(e) => setLigneId(e.target.value)}
@@ -241,7 +299,67 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
           {!loading && membres.length === 0 && (
             <p className="text-sm text-gray-400 py-6 text-center">Aucun chauffeur actif sur cette ligne.</p>
           )}
-          {!loading && membres.length > 0 && (
+          {!loading && membres.length > 0 && mode === 'jour' && (
+            <div className="border border-gray-200 rounded-lg overflow-x-auto">
+              <table className="w-full text-xs whitespace-nowrap">
+                <thead className="bg-gray-50 border-b border-gray-200 text-[10px] uppercase text-gray-500">
+                  <tr>
+                    <th className="px-2 py-2 text-left font-semibold sticky left-0 bg-gray-50">Jour</th>
+                    <th className="px-2 py-2 text-center font-semibold">N°</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Heures d'astreinte de tous les chauffeurs de la ligne">H. astreinte</th>
+                    <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
+                    <th className="px-2 py-2 text-center font-semibold">Planifies</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets planifies non payes ce jour-la (non termines, y compris repris par un remplacant)">Non effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets effectues sans avoir ete planifies">Non planif. effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold">Effectues</th>
+                    {colonnes.map(c => (
+                      <th key={c.key} className="px-2 py-2 text-center font-semibold" title={`${c.libelle} — ${c.tarif.toFixed(2)} EUR`}>
+                        {c.libelle}
+                        <span className="block text-[9px] font-normal text-gray-400">{c.tarif.toFixed(2)}</span>
+                      </th>
+                    ))}
+                    <th className="px-2 py-2 text-right font-semibold">Valeur</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {recapLigne.jours.map(j => (
+                    <tr key={j.date} className={`${j.isFerie ? 'bg-yellow-50/50' : j.jourSemaine >= 6 ? 'bg-blue-50/20' : ''} hover:bg-gray-50/60`}>
+                      <td className="px-2 py-1.5 font-medium text-gray-800 sticky left-0 bg-white">{j.libelle}</td>
+                      <td className="px-2 py-1.5 text-center text-gray-500">{j.jourSemaine}</td>
+                      <td className="px-2 py-1.5 text-center font-mono text-gray-600">{formatHeures(j.minutesAstreinte)}</td>
+                      <td className="px-2 py-1.5 text-right text-gray-700">{j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
+                      <td className="px-2 py-1.5 text-center text-gray-700">{j.planifies || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{j.nonEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{j.nonPlanifiesEffectues || ''}</td>
+                      <td className="px-2 py-1.5 text-center font-semibold text-gray-900">{j.effectues || ''}</td>
+                      {colonnes.map(c => (
+                        <td key={c.key} className="px-2 py-1.5 text-center text-gray-600">{j.parPlage[c.key] || ''}</td>
+                      ))}
+                      <td className="px-2 py-1.5 text-right font-semibold text-gray-900">{j.valeur ? eur(j.valeur) : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-gray-100 font-bold text-gray-900 border-t border-gray-200">
+                  <tr>
+                    <td className="px-2 py-2 sticky left-0 bg-gray-100">TOTAL {ligne?.code || ''} ({membres.length} chauffeurs)</td>
+                    <td></td>
+                    <td className="px-2 py-2 text-center font-mono">{formatHeures(recapLigne.totaux.minutesAstreinte)}</td>
+                    <td className="px-2 py-2 text-right">{eur(recapLigne.totaux.valeurAstreinte)}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.planifies}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.nonEffectues}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.nonPlanifiesEffectues}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.effectues}</td>
+                    {colonnes.map(c => (
+                      <td key={c.key} className="px-2 py-2 text-center">{recapLigne.totaux.parPlage[c.key] || 0}</td>
+                    ))}
+                    <td className="px-2 py-2 text-right">{eur(recapLigne.totaux.valeur)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+
+          {!loading && membres.length > 0 && mode === 'chauffeur' && (
             <div className="border border-gray-200 rounded-lg overflow-x-auto">
               <table className="w-full text-xs whitespace-nowrap">
                 <thead className="bg-gray-50 border-b border-gray-200 text-[10px] uppercase text-gray-500">

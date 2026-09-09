@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { ChevronLeft, ChevronRight, Plus, Copy, Printer, X, RefreshCw, FileEdit, Send, Shield, Download, Upload, UserCheck, Trash2, CheckSquare, ArrowLeftRight, Undo2 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { mDateStr, mInputStr, mParts, mHour, mDow, mSameDay, mMidnightISO, mInputToISO, mMondayStr, mNoon, mAddDaysStr, MAYOTTE_OFFSET, fmtHM, fmtMonthYear } from '../lib/mayotte';
+import { compterTrajets, etatTrajet, estRemplacement } from '../lib/statutCourse';
 
 type ViewMode = 'jour' | 'semaine' | 'mois' | 'liste';
 type PeriodeFilter = 'all' | 'matin' | 'apres_midi' | 'astreinte';
@@ -126,24 +127,6 @@ function overlapsMDay(debut: string, fin: string, jour: Date | string): boolean 
   return new Date(debut).getTime() < end && new Date(fin).getTime() > start;
 }
 
-// Comptage des trajets d'une selection, pour le controle rapide demande en
-// vue semaine et mois. Memes definitions que le rapport client, sinon les
-// chiffres du planning et ceux de la facturation ne concordent pas :
-//   - remplacements : courses assurees A LA PLACE d'un autre chauffeur
-//     (note "[Remplacement]", seul marqueur pose en base par le planning) ;
-//   - remplaces : courses reprises PAR un remplacant (statut 'remplace'),
-//     donc NON effectuees par le chauffeur de la ligne ;
-//   - hors : total moins les remplacements.
-function compteTrajets(list: Course[]) {
-  let remplacements = 0;
-  let remplaces = 0;
-  for (const c of list) {
-    if ((c.notes || '').startsWith('[Remplacement]')) remplacements++;
-    if ((c.statut_realisation || c.statut) === 'remplace') remplaces++;
-  }
-  return { total: list.length, remplacements, remplaces, hors: list.length - remplacements };
-}
-
 function parseCourseDate(dateStr: string): Date {
   if (dateStr.endsWith('Z') || dateStr.includes('+')) return new Date(dateStr);
   return new Date(dateStr.replace('T', ' '));
@@ -151,6 +134,8 @@ function parseCourseDate(dateStr: string): Date {
 
 export function PlanningPage({ user }: PlanningPageProps) {
   const [view, setView] = useState<ViewMode>('jour');
+  // Etendue de la vue Liste : journee (defaut), semaine ou mois.
+  const [listePeriode, setListePeriode] = useState<'jour' | 'semaine' | 'mois'>('jour');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [courses, setCourses] = useState<Course[]>([]);
   const [chauffeurs, setChauffeurs] = useState<Chauffeur[]>([]);
@@ -234,11 +219,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
       sessionStorage.removeItem('planning_chauffeur_filter');
     }
   }, []);
-  useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); loadExecutions(); }, [currentDate, view]);
+  useEffect(() => { loadCourses(); loadAstreintes(); loadCoordCreneaux(); loadExecutions(); }, [currentDate, view, listePeriode]);
   // Changer de date ou de vue vide la selection : sinon des courses cochees puis
   // devenues INVISIBLES (autre periode) resteraient supprimables/reaffectables
   // en lot sans que l'utilisateur les voie.
-  useEffect(() => { setSelectedCourseIds(new Set()); }, [currentDate, view]);
+  useEffect(() => { setSelectedCourseIds(new Set()); }, [currentDate, view, listePeriode]);
 
   // Rafraichissement temps reel : tous les directeurs voient l'etat des courses
   // a jour (statut_realisation mis a jour par les chauffeurs) sans recharger la
@@ -285,7 +270,22 @@ export function PlanningPage({ user }: PlanningPageProps) {
     // navigateur -> memes fenetres de journee que l'appli chauffeur/coordinateur.
     const p = mParts(currentDate);
     let fromStr: string, toStr: string;
-    if (view === 'jour' || view === 'liste') {
+    // La vue Liste couvre la journee, la semaine ou le mois au choix : la
+    // direction cherchait le planning MENSUEL d'un chauffeur en liste.
+    if (view === 'liste') {
+      if (listePeriode === 'semaine') {
+        fromStr = mMondayStr(currentDate);
+        toStr = mAddDaysStr(fromStr, 7);
+      } else if (listePeriode === 'mois') {
+        fromStr = `${p.y}-${p2(p.mo + 1)}-01`;
+        const ny = p.mo === 11 ? p.y + 1 : p.y;
+        const nmo = p.mo === 11 ? 0 : p.mo + 1;
+        toStr = `${ny}-${p2(nmo + 1)}-01`;
+      } else {
+        fromStr = mDateStr(currentDate);
+        toStr = mAddDaysStr(fromStr, 1);
+      }
+    } else if (view === 'jour') {
       fromStr = mDateStr(currentDate);
       toStr = mAddDaysStr(fromStr, 1);
     } else if (view === 'semaine') {
@@ -2017,11 +2017,12 @@ export function PlanningPage({ user }: PlanningPageProps) {
               </div>
               {weekDays.map(d => {
                 const nJour = filteredCourses.filter(c => isSameDay(parseCourseDate(c.date_heure), d)).length;
+                // (le detail effectues / non effectues est dans la ligne TOTAL en bas)
                 return (
                   <div key={d.toISOString()} className={`flex-1 text-center py-2 border-r border-gray-100 ${isSameDay(d, new Date()) ? 'bg-amber-50' : ''}`}>
                     <p className="text-[10px] text-gray-500 uppercase">{['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'][d.getDay()]}</p>
                     <p className={`text-sm font-bold ${isSameDay(d, new Date()) ? 'text-amber-600' : 'text-gray-900'}`}>{d.getDate()}</p>
-                    <p className="text-[9px] text-gray-400" title="Trajets affiches ce jour (filtres compris)">{nJour} trajet{nJour > 1 ? 's' : ''}</p>
+                    <p className="text-[9px] text-gray-400" title="Trajets planifies ce jour (filtres compris)">{nJour} planifie{nJour > 1 ? 's' : ''}</p>
                   </div>
                 );
               })}
@@ -2030,7 +2031,7 @@ export function PlanningPage({ user }: PlanningPageProps) {
             {filteredChauffeurs.map(ch => {
               const ligne = ch.ligne_id ? lignes.find(l => l.id === ch.ligne_id) : null;
               // Les courses chargees couvrent exactement la semaine affichee.
-              const semaine = compteTrajets(getCourseForChauffeur(ch.id));
+              const semaine = compterTrajets(getCourseForChauffeur(ch.id));
               return (
                 <div key={ch.id} className="flex border-b border-gray-50 hover:bg-gray-50/50">
                   <div className="w-52 flex-shrink-0 px-3 py-2 border-r border-gray-100">
@@ -2038,15 +2039,27 @@ export function PlanningPage({ user }: PlanningPageProps) {
                       <span className="text-[9px] px-1 py-0.5 rounded border font-bold" style={{ borderColor: ligne?.couleur || '#ccc', color: ligne?.couleur || '#666' }}>{ch.code}</span>
                       <span className="text-xs font-medium text-gray-900">{ch.nom} {ch.prenom}</span>
                     </div>
-                    <p className="text-[9px] mt-0.5 flex items-center gap-1.5">
-                      <span className={semaine.total > 0 ? 'text-gray-600 font-semibold' : 'text-gray-300'} title="Trajets qui lui sont affectes sur la semaine">
-                        {semaine.total} trajet{semaine.total > 1 ? 's' : ''}
+                    {/* Vocabulaire impose par la direction : planifies, non
+                        effectues ou remplaces, remplacements, effectues. */}
+                    <p className="text-[9px] mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <span className={semaine.planifies > 0 ? 'text-gray-600 font-semibold' : 'text-gray-300'} title="Trajets planifies sur la semaine">
+                        {semaine.planifies} planifie{semaine.planifies > 1 ? 's' : ''}
                       </span>
-                      {semaine.remplacements > 0 && (
-                        <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur">+{semaine.remplacements} rempl.</span>
+                      {semaine.effectues > 0 && (
+                        <span className="text-emerald-600" title="Trajets qui ont eu lieu (termines, ou demarres et non clotures)">{semaine.effectues} effectue{semaine.effectues > 1 ? 's' : ''}</span>
                       )}
-                      {semaine.remplaces > 0 && (
-                        <span className="text-red-500" title="Trajets repris par un remplacant : non effectues par lui">-{semaine.remplaces} remplaces</span>
+                      {semaine.nonEffectuesOuRemplaces > 0 && (
+                        <span className="text-red-500" title={`Non effectues ou remplaces : ${semaine.nonEffectues} jamais parti(s), ${semaine.remplaces} repris par un remplacant`}>
+                          {semaine.nonEffectuesOuRemplaces} non eff./rempl.
+                        </span>
+                      )}
+                      {semaine.remplacements > 0 && (
+                        <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur">{semaine.remplacements} remplacement{semaine.remplacements > 1 ? 's' : ''}</span>
+                      )}
+                      {semaine.demarres > 0 && (
+                        <span className="text-orange-600 font-medium" title="Trajets demarres et jamais clotures : comptes comme effectues, mais NON factures tant qu'ils ne sont pas clotures">
+                          {semaine.demarres} a cloturer
+                        </span>
                       )}
                     </p>
                   </div>
@@ -2081,8 +2094,19 @@ export function PlanningPage({ user }: PlanningPageProps) {
                           const isTerminee = c.statut_realisation === 'termine';
                           const isEnCours = !isTerminee && !isRemplacee && (c.statut === 'en_cours' || c.statut === 'en_retard' || c.statut_realisation === 'en_cours');
                           return (
-                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }} className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${isTerminee ? 'opacity-80 ring-1 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-1 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
+                            <div key={c.id} onClick={(e) => { e.stopPropagation(); onCourseClick(c); }}
+                              // En vue semaine, le nom du remplacant n'apparaissait nulle part :
+                              // il est desormais dans l'infobulle, comme le chauffeur remplace.
+                              title={[
+                                `${fmtHM(c.date_heure)} ${c.depart} → ${c.arrivee}`,
+                                liensRemplacement.remplacePar.has(c.id) ? `Remplace par ${libelleChauffeur(liensRemplacement.remplacePar.get(c.id))}` : '',
+                                liensRemplacement.remplaceDe.has(c.id) ? `Remplace ${libelleChauffeur(liensRemplacement.remplaceDe.get(c.id))}` : '',
+                              ].filter(Boolean).join(' — ')}
+                              className={`text-[9px] px-1 py-0.5 rounded mb-0.5 text-white truncate cursor-pointer ${isNonPlanifie ? 'border border-dashed border-gray-400' : ''} ${isBrouillon ? 'border border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-50 line-through' : ''} ${isTerminee ? 'opacity-80 ring-1 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-1 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(c.id) ? 'ring-2 ring-blue-700' : ''}`} style={{ backgroundColor: isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706') }}>
                               {isBrouillon ? '✎ ' : isRemplacee ? '⟳ ' : isTerminee ? '✓ ' : isEnCours ? '● ' : ''}{fmtHM(c.date_heure)} {c.depart} → {c.arrivee}
+                              {liensRemplacement.remplacePar.has(c.id) && (
+                                <span className="block opacity-90">↳ {(() => { const r = chauffeurs.find(x => x.id === liensRemplacement.remplacePar.get(c.id)); return r ? r.code : ''; })()}</span>
+                              )}
                             </div>
                           );
                         })}
@@ -2138,24 +2162,31 @@ export function PlanningPage({ user }: PlanningPageProps) {
             {/* Ligne TOTAL : controle rapide demande par la direction (nombre de
                 trajets par jour et sur la semaine, remplacements distingues). */}
             {(() => {
-              const semaine = compteTrajets(filteredCourses.filter(c => weekDays.some(wd => isSameDay(parseCourseDate(c.date_heure), wd))));
+              const semaine = compterTrajets(filteredCourses.filter(c => weekDays.some(wd => isSameDay(parseCourseDate(c.date_heure), wd))));
               return (
                 <div className="flex bg-gray-50 border-t-2 border-gray-200">
                   <div className="w-52 flex-shrink-0 px-3 py-2 border-r border-gray-200">
                     <p className="text-[11px] font-bold text-gray-800 uppercase">Total semaine</p>
-                    <p className="text-[9px] text-gray-500 mt-0.5">
-                      <span title="Total moins les trajets assures en remplacement">{semaine.hors} hors remplacement</span>
-                      {semaine.remplacements > 0 && <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur"> · {semaine.remplacements} remplacement{semaine.remplacements > 1 ? 's' : ''}</span>}
-                      {semaine.remplaces > 0 && <span className="text-red-500" title="Trajets repris par un remplacant"> · {semaine.remplaces} remplace{semaine.remplaces > 1 ? 's' : ''}</span>}
+                    <p className="text-[9px] text-gray-500 mt-0.5 leading-relaxed">
+                      <span title="Tous les trajets de la semaine, filtres compris">{semaine.planifies} planifies</span>
+                      <span className="text-emerald-600" title="Trajets qui ont eu lieu"> · {semaine.effectues} effectues</span>
+                      <span className="text-red-500" title={`${semaine.nonEffectues} jamais parti(s) + ${semaine.remplaces} repris par un remplacant`}> · {semaine.nonEffectuesOuRemplaces} non eff./rempl.</span>
+                      <span className="text-gray-500"> ({semaine.tauxNonEffectues.toFixed(1)} %)</span>
+                      {semaine.remplacements > 0 && <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur"> · {semaine.remplacements} remplacements</span>}
                     </p>
                   </div>
                   {weekDays.map(d => {
-                    const j = compteTrajets(filteredCourses.filter(c => isSameDay(parseCourseDate(c.date_heure), d)));
+                    const j = compterTrajets(filteredCourses.filter(c => isSameDay(parseCourseDate(c.date_heure), d)));
                     return (
                       <div key={d.toISOString()} className={`flex-1 text-center py-2 border-r border-gray-100 ${isSameDay(d, new Date()) ? 'bg-amber-50' : ''}`}>
-                        <p className={`text-sm font-bold ${j.total > 0 ? 'text-gray-900' : 'text-gray-300'}`}>{j.total}</p>
-                        {j.remplacements > 0 && <p className="text-[9px] text-amber-600" title="Trajets assures a la place d'un autre chauffeur">+{j.remplacements} rempl.</p>}
-                        {j.remplaces > 0 && <p className="text-[9px] text-red-500" title="Trajets repris par un remplacant">-{j.remplaces} remplaces</p>}
+                        <p className={`text-sm font-bold ${j.planifies > 0 ? 'text-gray-900' : 'text-gray-300'}`} title="Trajets planifies ce jour">{j.planifies}</p>
+                        {j.effectues > 0 && <p className="text-[9px] text-emerald-600" title="Trajets qui ont eu lieu">{j.effectues} eff.</p>}
+                        {j.nonEffectuesOuRemplaces > 0 && (
+                          <p className="text-[9px] text-red-500" title={`${j.nonEffectues} jamais parti(s) + ${j.remplaces} repris par un remplacant`}>
+                            {j.nonEffectuesOuRemplaces} non eff./rempl.
+                          </p>
+                        )}
+                        {j.remplacements > 0 && <p className="text-[9px] text-amber-600" title="Trajets assures a la place d'un autre chauffeur">{j.remplacements} rempl.</p>}
                       </div>
                     );
                   })}
@@ -2210,17 +2241,40 @@ export function PlanningPage({ user }: PlanningPageProps) {
             </div>
           </div>
 
-          {/* Recap du mois : nombre de trajets par chauffeur et au total, pour
-              controle rapide. Memes definitions que le rapport client. */}
+          {/* Recap du mois par chauffeur. Colonnes imposees par la direction
+              (ticket "les donnees presentees ici ne sont pas comprehensibles") :
+              planifies, non effectues ou remplaces, % de ceux-ci sur les
+              planifies, remplacements, effectues. */}
           {(() => {
             const moisCourses = filteredCourses.filter(c => monthDays.some(md => isSameDay(parseCourseDate(c.date_heure), md)));
             const lignes_ = filteredChauffeurs
-              .map(ch => ({ ch, st: compteTrajets(moisCourses.filter(c => c.chauffeur_id === ch.id)) }))
-              .filter(r => r.st.total > 0)
-              .sort((a, b) => b.st.total - a.st.total);
-            const nonAffectees = compteTrajets(moisCourses.filter(c => !c.chauffeur_id));
-            const tot = compteTrajets(moisCourses);
-            if (tot.total === 0) return null;
+              .map(ch => ({ ch, st: compterTrajets(moisCourses.filter(c => c.chauffeur_id === ch.id)) }))
+              .filter(r => r.st.planifies > 0)
+              .sort((a, b) => b.st.planifies - a.st.planifies);
+            const nonAffectees = compterTrajets(moisCourses.filter(c => !c.chauffeur_id));
+            const tot = compterTrajets(moisCourses);
+            if (tot.planifies === 0) return null;
+            const cellules = (st: typeof tot, couleur: string) => (
+              <>
+                <td className={`px-3 py-1.5 text-center font-semibold ${couleur}`}>{st.planifies}</td>
+                <td className={`px-3 py-1.5 text-center ${st.nonEffectuesOuRemplaces > 0 ? 'text-red-600 font-medium' : 'text-gray-300'}`}
+                    title={`${st.nonEffectues} jamais parti(s) + ${st.remplaces} repris par un remplacant`}>
+                  {st.nonEffectuesOuRemplaces}
+                </td>
+                <td className={`px-3 py-1.5 text-center ${st.tauxNonEffectues > 10 ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                  {st.tauxNonEffectues.toFixed(1)} %
+                </td>
+                <td className={`px-3 py-1.5 text-center ${st.remplacements > 0 ? 'text-amber-600 font-medium' : 'text-gray-300'}`}>{st.remplacements}</td>
+                <td className="px-3 py-1.5 text-center font-semibold text-emerald-700">
+                  {st.effectues}
+                  {st.demarres > 0 && (
+                    <span className="text-[9px] text-orange-600 ml-1" title="Dont trajets demarres et jamais clotures : non factures tant qu'ils ne le sont pas">
+                      (dont {st.demarres} a cloturer)
+                    </span>
+                  )}
+                </td>
+              </>
+            );
             return (
               <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-gray-800 text-white text-[10px] uppercase font-semibold">
@@ -2231,10 +2285,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200 text-[10px] uppercase text-gray-500">
                         <th className="text-left px-3 py-2 font-semibold">Chauffeur</th>
-                        <th className="text-center px-3 py-2 font-semibold" title="Trajets qui lui sont affectes">Trajets</th>
-                        <th className="text-center px-3 py-2 font-semibold" title="Trajets hors ceux assures en remplacement">Hors remplacement</th>
+                        <th className="text-center px-3 py-2 font-semibold" title="Tous les trajets qui lui sont affectes sur le mois">Trajets planifies</th>
+                        <th className="text-center px-3 py-2 font-semibold" title="Trajets jamais partis (ni annules) + trajets repris par un remplacant">Non effectues ou remplaces</th>
+                        <th className="text-center px-3 py-2 font-semibold" title="Part des trajets non effectues ou remplaces sur les trajets planifies">%</th>
                         <th className="text-center px-3 py-2 font-semibold" title="Trajets assures a la place d'un autre chauffeur">Remplacements</th>
-                        <th className="text-center px-3 py-2 font-semibold" title="Trajets repris par un remplacant : non effectues par lui">Remplaces</th>
+                        <th className="text-center px-3 py-2 font-semibold" title="Trajets qui ont eu lieu : termines, ou demarres sans avoir ete clotures">Trajets effectues</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
@@ -2246,37 +2301,33 @@ export function PlanningPage({ user }: PlanningPageProps) {
                               <span className="text-[9px] px-1 py-0.5 rounded border font-bold mr-1.5" style={{ borderColor: li?.couleur || '#ccc', color: li?.couleur || '#666' }}>{ch.code}</span>
                               <span className="text-xs text-gray-800">{ch.nom} {ch.prenom}</span>
                             </td>
-                            <td className="px-3 py-1.5 text-center font-semibold text-gray-900">{st.total}</td>
-                            <td className="px-3 py-1.5 text-center text-gray-700">{st.hors}</td>
-                            <td className={`px-3 py-1.5 text-center ${st.remplacements > 0 ? 'text-amber-600 font-medium' : 'text-gray-300'}`}>{st.remplacements}</td>
-                            <td className={`px-3 py-1.5 text-center ${st.remplaces > 0 ? 'text-red-500 font-medium' : 'text-gray-300'}`}>{st.remplaces}</td>
+                            {cellules(st, 'text-gray-900')}
                           </tr>
                         );
                       })}
-                      {nonAffectees.total > 0 && (
+                      {nonAffectees.planifies > 0 && (
                         <tr className="bg-amber-50/40">
                           <td className="px-3 py-1.5 text-xs font-medium text-amber-700">Non affectees (sans chauffeur)</td>
-                          <td className="px-3 py-1.5 text-center font-semibold text-amber-700">{nonAffectees.total}</td>
-                          <td className="px-3 py-1.5 text-center text-amber-700">{nonAffectees.hors}</td>
-                          <td className="px-3 py-1.5 text-center text-amber-700">{nonAffectees.remplacements}</td>
-                          <td className="px-3 py-1.5 text-center text-amber-700">{nonAffectees.remplaces}</td>
+                          {cellules(nonAffectees, 'text-amber-700')}
                         </tr>
                       )}
                     </tbody>
                     <tfoot>
                       <tr className="bg-gray-100 font-bold text-gray-900 border-t border-gray-200">
                         <td className="px-3 py-2 text-xs uppercase">Total ({lignes_.length} chauffeur{lignes_.length > 1 ? 's' : ''})</td>
-                        <td className="px-3 py-2 text-center">{tot.total}</td>
-                        <td className="px-3 py-2 text-center">{tot.hors}</td>
+                        <td className="px-3 py-2 text-center">{tot.planifies}</td>
+                        <td className="px-3 py-2 text-center text-red-600">{tot.nonEffectuesOuRemplaces}</td>
+                        <td className="px-3 py-2 text-center">{tot.tauxNonEffectues.toFixed(1)} %</td>
                         <td className="px-3 py-2 text-center text-amber-700">{tot.remplacements}</td>
-                        <td className="px-3 py-2 text-center text-red-600">{tot.remplaces}</td>
+                        <td className="px-3 py-2 text-center text-emerald-700">{tot.effectues}</td>
                       </tr>
                     </tfoot>
                   </table>
                 </div>
-                <p className="text-[10px] text-gray-400 px-3 py-2 bg-gray-50 border-t border-gray-100">
-                  Les compteurs suivent les filtres a l'ecran (ligne, chauffeur, periode).
-                  « Remplacement » = trajet assure a la place d'un autre chauffeur ; « remplace » = trajet repris par un remplacant.
+                <p className="text-[10px] text-gray-400 px-3 py-2 bg-gray-50 border-t border-gray-100 leading-relaxed">
+                  Les compteurs suivent les filtres a l'ecran (ligne, chauffeur, periode). Trajets planifies = non effectues ou remplaces + effectues.
+                  Un trajet <b>remplace</b> a bien ete assure, par le remplacant : il n'est pas compte comme non effectue, mais il ne l'a pas ete par ce chauffeur-la.
+                  Un trajet <b>demarre et jamais cloture</b> compte comme effectue, mais il n'est pas facture tant qu'il n'est pas cloture (bouton « Terminer » en vue Liste).
                 </p>
               </div>
             );
@@ -2306,8 +2357,9 @@ export function PlanningPage({ user }: PlanningPageProps) {
             default: return new Date(c.date_heure).getTime();
           }
         };
+        // Les courses chargees couvrent deja l'etendue choisie (jour / semaine /
+        // mois) : inutile de refiltrer par journee.
         const jour = [...filteredCourses]
-          .filter(c => isSameDay(parseCourseDate(c.date_heure), currentDate))
           .sort((a, b) => {
             const va = sortVal(a), vb = sortVal(b);
             let cmp = typeof va === 'number' && typeof vb === 'number'
@@ -2328,27 +2380,55 @@ export function PlanningPage({ user }: PlanningPageProps) {
             </button>
           </th>
         );
+        // Le badge dit l'ETAT REEL du trajet, pas le champ brut : un trajet
+        // programme dont l'heure est passee et qui n'est jamais parti est
+        // "Non effectue", et un trajet demarre jamais cloture est "A cloturer"
+        // (il a eu lieu, mais il n'est pas facture).
         const statutBadge = (c: Course) => {
-          const s = c.is_brouillon ? 'brouillon' : (c.statut_realisation || 'programme');
-          const map: Record<string, [string, string]> = {
-            brouillon: ['Brouillon', 'bg-blue-100 text-blue-700'],
-            programme: ['Programme', 'bg-gray-100 text-gray-600'],
-            en_cours: ['En cours', 'bg-green-100 text-green-700'],
-            termine: ['Termine', 'bg-green-100 text-green-700'],
-            terminee: ['Termine', 'bg-green-100 text-green-700'],
-            en_retard: ['En retard', 'bg-yellow-100 text-yellow-700'],
-            remplace: ['Remplace', 'bg-red-100 text-red-700'],
-            annule: ['Annule', 'bg-red-100 text-red-700'],
-          };
-          const [lab, cls] = map[s] || [s, 'bg-gray-100 text-gray-600'];
-          return <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${cls}`}>{lab}</span>;
+          const pastille = (lab: string, cls: string, titre: string) => (
+            <span title={titre} className={`text-[10px] font-semibold px-2 py-0.5 rounded ${cls}`}>{lab}</span>
+          );
+          if (c.is_brouillon) return pastille('Brouillon', 'bg-blue-100 text-blue-700', 'Non publie : invisible pour le chauffeur');
+          const brut = c.statut_realisation || '';
+          if (brut === 'annule' || brut === 'annulee') return pastille('Annule', 'bg-red-100 text-red-700', 'Trajet annule');
+          if (brut === 'incident') return pastille('Incident', 'bg-orange-100 text-orange-700', 'Trajet interrompu par un incident');
+          switch (etatTrajet(c)) {
+            case 'effectue': return pastille('Effectue', 'bg-green-100 text-green-700', 'Termine par le chauffeur');
+            case 'demarre': return pastille('A cloturer', 'bg-orange-100 text-orange-700', "Demarre par le chauffeur mais jamais cloture : le trajet a eu lieu, mais il n'est pas facture tant qu'il n'est pas cloture");
+            case 'remplace': return pastille('Remplace', 'bg-red-100 text-red-700', 'Repris par un remplacant : assure, mais pas par ce chauffeur');
+            case 'non_effectue': return pastille('Non effectue', 'bg-red-100 text-red-700', "L'heure est passee et le trajet n'est jamais parti");
+            default: return pastille('Programme', 'bg-gray-100 text-gray-600', "L'heure n'est pas encore passee");
+          }
         };
         return (
           <div className="px-6 pb-6">
+            {/* Etendue de la liste : la direction cherchait le planning MENSUEL
+                d'un chauffeur en liste (filtre chauffeur + etendue Mois). */}
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-[10px] text-gray-500 uppercase font-semibold">Afficher</span>
+              <div className="flex border border-gray-200 rounded-lg overflow-hidden">
+                {([['jour', 'La journee'], ['semaine', 'La semaine'], ['mois', 'Le mois']] as const).map(([cle, lib]) => (
+                  <button
+                    key={cle}
+                    type="button"
+                    onClick={() => setListePeriode(cle)}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${listePeriode === cle ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                  >
+                    {lib}
+                  </button>
+                ))}
+              </div>
+              {chauffeurFilter !== 'all' && (
+                <span className="text-[11px] text-gray-500">
+                  {(() => { const c = chauffeurs.find(x => x.id === chauffeurFilter); return c ? `${c.code} ${c.nom} ${c.prenom}` : ''; })()}
+                </span>
+              )}
+            </div>
             <div className="border border-gray-200 rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200 text-[10px] uppercase text-gray-500">
                   <tr>
+                    {listePeriode !== 'jour' && <th className="text-left px-3 py-2 font-semibold uppercase">Date</th>}
                     <SortTh field="heure" label="Heure" />
                     <SortTh field="fin" label="Fin" />
                     <th className="text-left px-3 py-2 font-semibold uppercase" title="Heure a laquelle le chauffeur a reellement demarre (appli chauffeur)">Depart reel</th>
@@ -2368,6 +2448,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
                     const selected = selectMode && selectedCourseIds.has(course.id);
                     return (
                       <tr key={course.id} onClick={() => onCourseClick(course)} className={`cursor-pointer transition-colors ${selected ? 'bg-blue-50' : 'hover:bg-amber-50/40'}`}>
+                        {listePeriode !== 'jour' && (
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+                            {(() => { const p = mParts(course.date_heure); return `${FR_DAYS[p.dow].slice(0, 3)} ${p2(p.d)}/${p2(p.mo + 1)}`; })()}
+                          </td>
+                        )}
                         <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{fmtHM(course.date_heure)}</td>
                         <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtHM(new Date(new Date(course.date_heure).getTime() + (course.duree_minutes || 0) * 60000).toISOString())}</td>
                         {(() => {
@@ -2403,8 +2488,8 @@ export function PlanningPage({ user }: PlanningPageProps) {
                               remplace {libelleChauffeur(liensRemplacement.remplaceDe.get(course.id))}
                             </span>
                           )}
-                          {!liensRemplacement.remplaceDe.has(course.id) && (course.notes || '').startsWith('[Remplacement]') && (
-                            <span className="block text-[10px] text-amber-600">remplacement</span>
+                          {!liensRemplacement.remplaceDe.has(course.id) && estRemplacement(course) && (
+                            <span className="block text-[10px] text-amber-600" title="Trajet assure a la place d'un autre chauffeur (chauffeur remplace non retrouve)">remplacement</span>
                           )}
                         </td>
                         <td className="px-3 py-2">{li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}</td>
@@ -2412,15 +2497,6 @@ export function PlanningPage({ user }: PlanningPageProps) {
                         <td className="px-3 py-2 text-gray-500">{periodeLabels[course.periode] || course.periode}</td>
                         <td className="px-3 py-2">
                           {statutBadge(course)}
-                          {/* Course demarree un jour passe et jamais cloturee par
-                              le chauffeur : elle resterait "en cours" pour
-                              toujours et ne serait pas facturee. */}
-                          {(course.statut_realisation === 'en_cours' || course.statut === 'en_cours')
-                            && !isSameDay(parseCourseDate(course.date_heure), new Date()) && (
-                            <span className="block text-[10px] text-red-500 font-medium" title="Le chauffeur a demarre ce trajet sans jamais le terminer : a cloturer a la main, sinon il n'est pas facture">
-                              jamais terminee
-                            </span>
-                          )}
                         </td>
                         <td className="px-3 py-2 text-right">
                           {estCloturable(course) && (
@@ -2441,32 +2517,35 @@ export function PlanningPage({ user }: PlanningPageProps) {
                 </tbody>
               </table>
               {jour.length === 0 && (
-                <div className="p-8 text-center text-gray-400 text-sm">Aucune course ce jour</div>
+                <div className="p-8 text-center text-gray-400 text-sm">
+                  Aucune course sur {listePeriode === 'jour' ? 'cette journee' : listePeriode === 'semaine' ? 'cette semaine' : 'ce mois'}
+                </div>
               )}
             </div>
-            {/* Compteurs du jour : prevus / realises / remplacements / non
-                effectues (demande "visualisation des courses qui remplacent"). */}
+            {/* Compteurs de la periode affichee, avec le vocabulaire de la
+                direction : planifies / non effectues ou remplaces / % /
+                remplacements / effectues. */}
             {(() => {
-              const estRemplacement = (c: Course) => (c.notes || '').startsWith('[Remplacement]');
-              const st = (c: Course) => c.statut_realisation || c.statut || '';
-              const prevus = jour.filter(c => !estRemplacement(c)).length;
-              const remplacements = jour.filter(estRemplacement).length;
-              const realises = jour.filter(c => st(c) === 'termine' || st(c) === 'terminee').length;
-              const nonEffectues = jour.filter(c => ['remplace', 'annule', 'annulee', 'incident', 'non_effectue'].includes(st(c))).length;
-              const jamaisTerminees = jour.filter(c => (st(c) === 'en_cours') && !isSameDay(parseCourseDate(c.date_heure), new Date())).length;
+              const st = compterTrajets(jour);
               return (
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-                  <span className="text-gray-500">{formatDateFr(currentDate)}</span>
-                  <span className="text-gray-800 font-semibold" title="Trajets programmes, hors trajets assures en remplacement">{prevus} prevu{prevus > 1 ? 's' : ''}</span>
-                  <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur">{remplacements} en remplacement</span>
-                  <span className="text-emerald-600" title="Trajets termines par le chauffeur">{realises} realise{realises > 1 ? 's' : ''}</span>
-                  <span className={nonEffectues > 0 ? 'text-red-500' : 'text-gray-400'} title="Annules, incidents, ou repris par un remplacant">{nonEffectues} non effectue{nonEffectues > 1 ? 's' : ''}</span>
-                  {jamaisTerminees > 0 && (
-                    <span className="text-red-600 font-medium" title="Trajets demarres un jour passe et jamais clotures par le chauffeur : a cloturer a la main, sinon ils ne sont pas factures">
-                      {jamaisTerminees} jamais terminee{jamaisTerminees > 1 ? 's' : ''}
+                  <span className="text-gray-500">
+                    {listePeriode === 'jour' ? formatDateFr(currentDate)
+                      : listePeriode === 'semaine' ? `Semaine du ${formatDateFr(getMonday(currentDate))}`
+                      : fmtMonthYear(currentDate)}
+                  </span>
+                  <span className="text-gray-800 font-semibold" title="Tous les trajets de la periode, filtres compris">{st.planifies} planifie{st.planifies > 1 ? 's' : ''}</span>
+                  <span className="text-red-500" title={`${st.nonEffectues} jamais parti(s) + ${st.remplaces} repris par un remplacant`}>
+                    {st.nonEffectuesOuRemplaces} non effectue{st.nonEffectuesOuRemplaces > 1 ? 's' : ''} ou remplace{st.nonEffectuesOuRemplaces > 1 ? 's' : ''} ({st.tauxNonEffectues.toFixed(1)} %)
+                  </span>
+                  <span className="text-amber-600" title="Trajets assures a la place d'un autre chauffeur">{st.remplacements} remplacement{st.remplacements > 1 ? 's' : ''}</span>
+                  <span className="text-emerald-600" title="Trajets qui ont eu lieu : termines, ou demarres sans avoir ete clotures">{st.effectues} effectue{st.effectues > 1 ? 's' : ''}</span>
+                  {st.demarres > 0 && (
+                    <span className="text-orange-600 font-medium" title="Trajets demarres et jamais clotures : ils comptent comme effectues mais ne sont PAS factures tant qu'ils ne sont pas clotures (bouton Terminer)">
+                      dont {st.demarres} a cloturer
                     </span>
                   )}
-                  <span className="text-gray-400">· {jour.length} ligne{jour.length > 1 ? 's' : ''} affichee{jour.length > 1 ? 's' : ''}</span>
+                  {st.aVenir > 0 && <span className="text-gray-400" title="Trajets dont l'heure n'est pas encore passee">{st.aVenir} a venir</span>}
                 </div>
               );
             })()}
