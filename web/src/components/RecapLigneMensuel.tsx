@@ -55,21 +55,25 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
   const [creneaux, setCreneaux] = useState<{ chauffeur_id: string; date_debut: string; date_fin: string | null }[]>([]);
   const [tarifHeureAstreinte, setTarifHeureAstreinte] = useState(0);
 
-  const membres = useMemo(
-    () => chauffeurs
-      .filter(c => c.ligne_id === ligneId)
-      .sort((a, b) => {
-        const n = (code: string) => { const m = code.match(/(\d+)/); return m ? parseInt(m[1], 10) : 9999; };
-        return (a.code.replace(/\d+/g, '')).localeCompare(b.code.replace(/\d+/g, '')) || n(a.code) - n(b.code);
-      }),
-    [chauffeurs, ligneId],
-  );
+  // Chauffeurs du tableau : tous ceux qui ont roule sur la ligne ce mois-ci, et
+  // non seulement ceux qui y sont rattaches AUJOURD'HUI. Filtrer par ligne de
+  // rattachement du chauffeur perdait les trajets des chauffeurs d'autres lignes
+  // (L3 le 01/08 : 75 planifies au lieu de 89) et ajoutait ceux que les
+  // chauffeurs de la ligne avaient faits ailleurs (26 remplacements au lieu de 13).
+  const membres = useMemo(() => {
+    const ids = new Set<string>();
+    courses.forEach(c => { if (c.chauffeur_id) ids.add(c.chauffeur_id); });
+    chauffeurs.filter(c => c.ligne_id === ligneId).forEach(c => ids.add(c.id));
+    const n = (code: string) => { const m = code.match(/(\d+)/); return m ? parseInt(m[1], 10) : 9999; };
+    return [...ids]
+      .map((id): Chauffeur => chauffeurs.find(c => c.id === id) || { id, code: '?', nom: 'Chauffeur inactif', prenom: '', ligne_id: null })
+      .sort((x, y) => (x.code.replace(/\d+/g, '')).localeCompare(y.code.replace(/\d+/g, '')) || n(x.code) - n(y.code));
+  }, [chauffeurs, ligneId, courses]);
 
   useEffect(() => { if (ligneId) charger(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [ligneId, moisSel]);
 
   async function charger() {
     const ids = chauffeurs.filter(c => c.ligne_id === ligneId).map(c => c.id);
-    if (ids.length === 0) { setCourses([]); return; }
     setLoading(true);
     try {
       const [y, m] = moisSel.split('-').map(Number);
@@ -86,8 +90,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await supabase
           .from('courses')
-          .select('id, date_heure, ligne_id, montant, is_astreinte, statut_planification, statut_realisation, chauffeur_id')
-          .in('chauffeur_id', ids)
+          .select('id, date_heure, ligne_id, montant, is_astreinte, statut_planification, statut_realisation, chauffeur_id, notes')
+          .eq('ligne_id', ligneId)
           .gte('date_heure', debut)
           .lt('date_heure', fin)
           .order('date_heure')
@@ -103,11 +107,12 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
           .gte('date', `${y}-${String(m).padStart(2, '0')}-01`)
           .lte('date', `${y}-${String(m).padStart(2, '0')}-${dernier}`),
         supabase.from('astreinte_sessions').select('chauffeur_id, date')
-          .in('chauffeur_id', ids)
+          .in('chauffeur_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
           .gte('date', `${y}-${String(m).padStart(2, '0')}-01`)
           .lte('date', `${y}-${String(m).padStart(2, '0')}-${dernier}`),
+        // Astreintes posees sur la ligne (ou sans ligne, pour un chauffeur de la ligne).
         supabase.from('astreintes').select('chauffeur_id, date_debut, date_fin')
-          .in('chauffeur_id', ids)
+          .or(ids.length ? `ligne_id.eq.${ligneId},and(ligne_id.is.null,chauffeur_id.in.(${ids.join(',')}))` : `ligne_id.eq.${ligneId}`)
           .gte('date_debut', debut)
           .lt('date_debut', fin),
       ]);
@@ -162,7 +167,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
   const grandTotal: RecapTotaux = useMemo(() => {
     const vide: RecapTotaux = {
       minutesAstreinte: 0, minutesPlanifiees: 0, nbAstreintes: 0, valeurAstreinte: 0,
-      planifies: 0, nonEffectues: 0, remplaces: 0, aCloturer: 0, nonPlanifiesEffectues: 0, effectues: 0,
+      planifies: 0, nonEffectues: 0, remplaces: 0, aCloturer: 0, remplacements: 0, effectues: 0, trajetsAstreinte: 0,
       parPlage: {}, valeur: 0, complementGreve: 0,
     };
     return lignesRecap.reduce((acc, l) => {
@@ -177,8 +182,9 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
         nonEffectues: acc.nonEffectues + l.totaux.nonEffectues,
         remplaces: acc.remplaces + l.totaux.remplaces,
         aCloturer: acc.aCloturer + l.totaux.aCloturer,
-        nonPlanifiesEffectues: acc.nonPlanifiesEffectues + l.totaux.nonPlanifiesEffectues,
+        remplacements: acc.remplacements + l.totaux.remplacements,
         effectues: acc.effectues + l.totaux.effectues,
+        trajetsAstreinte: acc.trajetsAstreinte + l.totaux.trajetsAstreinte,
         parPlage,
         valeur: acc.valeur + l.totaux.valeur,
         complementGreve: acc.complementGreve + l.totaux.complementGreve,
@@ -188,16 +194,16 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
 
   const ligne = lignes.find(l => l.id === ligneId);
   const enTetes = [
-    'Chauffeur', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
-    'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
+    'Chauffeur', 'H. astreinte', 'Astreinte (EUR)', 'Trajets astreinte', 'Planifies', 'Non effectues',
+    'Remplaces', 'A cloturer', 'Remplacements', 'Effectues',
     ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
     'Valeur',
   ];
 
   function exportExcelJours() {
     const enTetesJours = [
-      'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
-      'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
+      'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Trajets astreinte', 'Planifies', 'Non effectues',
+      'Remplaces', 'A cloturer', 'Remplacements', 'Effectues',
       ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
       'Valeur',
     ];
@@ -206,7 +212,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       j.libelle.split(' ')[0], j.date, j.jourSemaine,
       formatHeures(j.minutesAstreinte),
       Math.round(j.valeurAstreinte * 100) / 100,
-      j.planifies, j.nonEffectues, j.remplaces, j.aCloturer, j.nonPlanifiesEffectues, j.effectues,
+      j.trajetsAstreinte,
+      j.planifies, j.nonEffectues, j.remplaces, j.aCloturer, j.remplacements, j.effectues,
       ...colonnes.map(c => j.parPlage[c.key] || 0),
       Math.round(j.valeur * 100) / 100,
     ]));
@@ -215,7 +222,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       'TOTAL', '', '',
       formatHeures(t.minutesAstreinte),
       Math.round(t.valeurAstreinte * 100) / 100,
-      t.planifies, t.nonEffectues, t.remplaces, t.aCloturer, t.nonPlanifiesEffectues, t.effectues,
+      t.trajetsAstreinte,
+      t.planifies, t.nonEffectues, t.remplaces, t.aCloturer, t.remplacements, t.effectues,
       ...colonnes.map(c => t.parPlage[c.key] || 0),
       Math.round(t.valeur * 100) / 100,
     ]);
@@ -232,7 +240,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       `${l.chauffeur.code} ${l.chauffeur.nom} ${l.chauffeur.prenom}`.trim(),
       formatHeures(l.totaux.minutesAstreinte),
       Math.round(l.totaux.valeurAstreinte * 100) / 100,
-      l.totaux.planifies, l.totaux.nonEffectues, l.totaux.remplaces, l.totaux.aCloturer, l.totaux.nonPlanifiesEffectues, l.totaux.effectues,
+      l.totaux.trajetsAstreinte,
+      l.totaux.planifies, l.totaux.nonEffectues, l.totaux.remplaces, l.totaux.aCloturer, l.totaux.remplacements, l.totaux.effectues,
       ...colonnes.map(c => l.totaux.parPlage[c.key] || 0),
       Math.round(l.totaux.valeur * 100) / 100,
     ]));
@@ -240,7 +249,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
       `TOTAL (${lignesRecap.length} chauffeurs)`,
       formatHeures(grandTotal.minutesAstreinte),
       Math.round(grandTotal.valeurAstreinte * 100) / 100,
-      grandTotal.planifies, grandTotal.nonEffectues, grandTotal.remplaces, grandTotal.aCloturer, grandTotal.nonPlanifiesEffectues, grandTotal.effectues,
+      grandTotal.trajetsAstreinte,
+      grandTotal.planifies, grandTotal.nonEffectues, grandTotal.remplaces, grandTotal.aCloturer, grandTotal.remplacements, grandTotal.effectues,
       ...colonnes.map(c => grandTotal.parPlage[c.key] || 0),
       Math.round(grandTotal.valeur * 100) / 100,
     ]);
@@ -257,7 +267,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
           <div>
             <h3 className="font-bold text-gray-900">Recapitulatif mensuel par ligne</h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Cumuls du mois par chauffeur, memes colonnes que le recap individuel.
+              Tous les trajets de la ligne sur le mois, quel que soit le rattachement du chauffeur. Memes colonnes que le recap individuel.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -299,7 +309,7 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
         <div className="flex-1 overflow-auto p-5">
           {loading && <p className="text-sm text-gray-400 py-6 text-center">Chargement...</p>}
           {!loading && membres.length === 0 && (
-            <p className="text-sm text-gray-400 py-6 text-center">Aucun chauffeur actif sur cette ligne.</p>
+            <p className="text-sm text-gray-400 py-6 text-center">Aucun trajet sur cette ligne ce mois-ci.</p>
           )}
           {!loading && membres.length > 0 && mode === 'jour' && (
             <div className="border border-gray-200 rounded-lg overflow-x-auto">
@@ -310,12 +320,13 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <th className="px-2 py-2 text-center font-semibold">N°</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Heures d'astreinte de tous les chauffeurs de la ligne">H. astreinte</th>
                     <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
-                    <th className="px-2 py-2 text-center font-semibold">Planifies</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets termines pendant un creneau d'astreinte, payes au tarif astreinte">Trajets astr.</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets du planning, hors courses creees pour un remplacant">Planifies</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets programmes jamais partis, non remplaces (ou annules / en incident)">Non effectues</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets repris par un remplacant : assures, mais pas par ce chauffeur">Remplaces</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets demarres et jamais clotures : ils ont eu lieu, mais ils ne sont pas payes tant qu'ils ne sont pas clotures">A cloturer</th>
-                    <th className="px-2 py-2 text-center font-semibold" title="Trajets effectues sans avoir ete planifies">Non planif. effectues</th>
-                    <th className="px-2 py-2 text-center font-semibold">Effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets assures a la place d'un autre chauffeur">Remplacements</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets qui ont eu lieu : planifies - non effectues - remplaces + remplacements">Effectues</th>
                     {colonnes.map(c => (
                       <th key={c.key} className="px-2 py-2 text-center font-semibold" title={`${c.libelle} — ${c.tarif.toFixed(2)} EUR`}>
                         {c.libelle}
@@ -332,11 +343,12 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                       <td className="px-2 py-1.5 text-center text-gray-500">{j.jourSemaine}</td>
                       <td className="px-2 py-1.5 text-center font-mono text-gray-600">{formatHeures(j.minutesAstreinte)}</td>
                       <td className="px-2 py-1.5 text-right text-gray-700">{j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.trajetsAstreinte > 0 ? 'text-gray-800 font-semibold' : 'text-gray-300'}`}>{j.trajetsAstreinte || ''}</td>
                       <td className="px-2 py-1.5 text-center text-gray-700">{j.planifies || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-red-600 font-semibold' : 'text-gray-300'}`}>{j.nonEffectues || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${j.remplaces > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{j.remplaces || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${j.aCloturer > 0 ? 'text-orange-600 font-semibold' : 'text-gray-300'}`}>{j.aCloturer || ''}</td>
-                      <td className={`px-2 py-1.5 text-center ${j.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{j.nonPlanifiesEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${j.remplacements > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{j.remplacements || ''}</td>
                       <td className="px-2 py-1.5 text-center font-semibold text-gray-900">{j.effectues || ''}</td>
                       {colonnes.map(c => (
                         <td key={c.key} className="px-2 py-1.5 text-center text-gray-600">{j.parPlage[c.key] || ''}</td>
@@ -351,11 +363,12 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <td></td>
                     <td className="px-2 py-2 text-center font-mono">{formatHeures(recapLigne.totaux.minutesAstreinte)}</td>
                     <td className="px-2 py-2 text-right">{eur(recapLigne.totaux.valeurAstreinte)}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.trajetsAstreinte}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.planifies}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.nonEffectues}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.remplaces}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.aCloturer}</td>
-                    <td className="px-2 py-2 text-center">{recapLigne.totaux.nonPlanifiesEffectues}</td>
+                    <td className="px-2 py-2 text-center">{recapLigne.totaux.remplacements}</td>
                     <td className="px-2 py-2 text-center">{recapLigne.totaux.effectues}</td>
                     {colonnes.map(c => (
                       <td key={c.key} className="px-2 py-2 text-center">{recapLigne.totaux.parPlage[c.key] || 0}</td>
@@ -375,12 +388,13 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <th className="px-2 py-2 text-left font-semibold sticky left-0 bg-gray-50">Chauffeur</th>
                     <th className="px-2 py-2 text-center font-semibold">H. astreinte</th>
                     <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
-                    <th className="px-2 py-2 text-center font-semibold">Planifies</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets termines pendant un creneau d'astreinte, payes au tarif astreinte">Trajets astr.</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets du planning, hors courses creees pour un remplacant">Planifies</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets programmes jamais partis, non remplaces (ou annules / en incident)">Non effectues</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets repris par un remplacant">Remplaces</th>
                     <th className="px-2 py-2 text-center font-semibold" title="Trajets demarres et jamais clotures : non payes tant qu'ils ne le sont pas">A cloturer</th>
-                    <th className="px-2 py-2 text-center font-semibold" title="Trajets effectues sans avoir ete planifies">Non planif. effectues</th>
-                    <th className="px-2 py-2 text-center font-semibold">Effectues</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets assures a la place d'un autre chauffeur">Remplacements</th>
+                    <th className="px-2 py-2 text-center font-semibold" title="Trajets qui ont eu lieu : planifies - non effectues - remplaces + remplacements">Effectues</th>
                     {colonnes.map(c => (
                       <th key={c.key} className="px-2 py-2 text-center font-semibold" title={`${c.libelle} — ${c.tarif.toFixed(2)} EUR`}>
                         {c.libelle}
@@ -399,11 +413,12 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                       </td>
                       <td className="px-2 py-1.5 text-center font-mono text-gray-600">{formatHeures(t.minutesAstreinte)}</td>
                       <td className="px-2 py-1.5 text-right text-gray-700">{t.valeurAstreinte ? eur(t.valeurAstreinte) : ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${t.trajetsAstreinte > 0 ? 'text-gray-800 font-semibold' : 'text-gray-300'}`}>{t.trajetsAstreinte || ''}</td>
                       <td className="px-2 py-1.5 text-center text-gray-700">{t.planifies || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${t.nonEffectues > 0 ? 'text-red-600 font-semibold' : 'text-gray-300'}`}>{t.nonEffectues || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${t.remplaces > 0 ? 'text-amber-700 font-semibold' : 'text-gray-300'}`}>{t.remplaces || ''}</td>
                       <td className={`px-2 py-1.5 text-center ${t.aCloturer > 0 ? 'text-orange-600 font-semibold' : 'text-gray-300'}`}>{t.aCloturer || ''}</td>
-                      <td className={`px-2 py-1.5 text-center ${t.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{t.nonPlanifiesEffectues || ''}</td>
+                      <td className={`px-2 py-1.5 text-center ${t.remplacements > 0 ? 'text-blue-700 font-semibold' : 'text-gray-300'}`}>{t.remplacements || ''}</td>
                       <td className="px-2 py-1.5 text-center font-semibold text-gray-900">{t.effectues || ''}</td>
                       {colonnes.map(c => (
                         <td key={c.key} className="px-2 py-1.5 text-center text-gray-600">{t.parPlage[c.key] || ''}</td>
@@ -417,11 +432,12 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
                     <td className="px-2 py-2 sticky left-0 bg-gray-100">TOTAL ({lignesRecap.length} chauffeurs)</td>
                     <td className="px-2 py-2 text-center font-mono">{formatHeures(grandTotal.minutesAstreinte)}</td>
                     <td className="px-2 py-2 text-right">{eur(grandTotal.valeurAstreinte)}</td>
+                    <td className="px-2 py-2 text-center">{grandTotal.trajetsAstreinte}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.planifies}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.nonEffectues}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.remplaces}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.aCloturer}</td>
-                    <td className="px-2 py-2 text-center">{grandTotal.nonPlanifiesEffectues}</td>
+                    <td className="px-2 py-2 text-center">{grandTotal.remplacements}</td>
                     <td className="px-2 py-2 text-center">{grandTotal.effectues}</td>
                     {colonnes.map(c => (
                       <td key={c.key} className="px-2 py-2 text-center">{grandTotal.parPlage[c.key] || 0}</td>
@@ -433,8 +449,8 @@ export function RecapLigneMensuel({ lignes, chauffeurs, mois, onClose }: Props) 
             </div>
           )}
           <p className="text-[10px] text-gray-400 mt-3">
-            Valeur = somme des montants des trajets TERMINES + astreinte du mois, exactement comme le recap
-            individuel de chaque chauffeur : c'est ce qui est paye. Un trajet remplace, ou reste a cloturer, n'y entre pas.
+            Valeur = somme des montants des trajets TERMINES sur cette ligne + astreinte du mois : c'est ce qui est paye.
+            Un chauffeur qui a aussi roule sur une autre ligne retrouve sa facture complete dans son recap individuel. Un trajet remplace, ou reste a cloturer, n'y entre pas.
             Les colonnes de droite comptent les trajets termines par plage tarifaire.
           </p>
         </div>

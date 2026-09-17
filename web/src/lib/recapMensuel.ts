@@ -16,7 +16,7 @@
 // par astreinte realisee.
 
 import { mParts, mDateStr } from './mayotte';
-import { etatTrajet } from './statutCourse';
+import { compterTrajets, etatTrajet } from './statutCourse';
 
 export interface RecapCourse {
   id: string;
@@ -26,6 +26,7 @@ export interface RecapCourse {
   is_astreinte: boolean | null;
   statut_planification: string | null;
   statut_realisation: string | null;
+  notes?: string | null;
   /** Facultatifs : servent au detail d'une journee ouverte depuis le recap. */
   depart?: string | null;
   arrivee?: string | null;
@@ -80,6 +81,7 @@ export interface RecapJour {
   heuresSaisies: boolean;     // true si la duree du jour a ete saisie a la main
   nbAstreintes: number;       // nombre de sessions confirmees par le chauffeur
   valeurAstreinte: number;    // EUR : heures retenues x tarif horaire
+  /** Trajets du planning, hors courses creees pour les remplacants. */
   planifies: number;
   /** Programmes, jamais partis, non remplaces (+ annules / incidents). */
   nonEffectues: number;
@@ -87,9 +89,15 @@ export interface RecapJour {
   remplaces: number;
   /** Demarres et jamais clotures : le trajet a eu lieu, mais il n'est PAS paye. */
   aCloturer: number;
-  nonPlanifiesEffectues: number;
-  /** Trajets TERMINES, c'est-a-dire payes : c'est la base de la colonne Valeur. */
+  /** Trajets assures a la place d'un autre chauffeur (ayant eu lieu). */
+  remplacements: number;
+  /**
+   * Trajets qui ont eu lieu (termines + a cloturer), comme dans le planning :
+   * planifies - non effectues - remplaces + remplacements.
+   */
   effectues: number;
+  /** Trajets termines pendant une astreinte (payes au tarif astreinte). */
+  trajetsAstreinte: number;
   parPlage: Record<string, number>;  // key de colonne -> nb de trajets realises
   valeur: number;             // EUR : courses realisees + forfait astreintes
   complementGreve: number;    // saisie manuelle (n'existe pas en base)
@@ -104,8 +112,9 @@ export interface RecapTotaux {
   nonEffectues: number;
   remplaces: number;
   aCloturer: number;
-  nonPlanifiesEffectues: number;
+  remplacements: number;
   effectues: number;
+  trajetsAstreinte: number;
   parPlage: Record<string, number>;
   valeur: number;
   complementGreve: number;
@@ -224,30 +233,21 @@ export function buildRecapMensuel(params: {
     const dayCreneaux = creneauxParJour.get(date) || [];
 
     const parPlage: Record<string, number> = {};
-    let planifies = 0, nonEffectues = 0, remplaces = 0, aCloturer = 0;
-    let nonPlanifiesEffectues = 0, effectues = 0, valeur = 0;
+    // Comptage unique de l'application (lib/statutCourse) : le recap tombe sur
+    // les memes chiffres que le bas du planning. La colonne Valeur et la
+    // ventilation par plage, elles, ne comptent QUE les trajets termines : c'est
+    // ce qui est paye, et ce qui doit reconcilier au centime avec la facture.
+    const comptes = compterTrajets(dayCourses.map(c => ({
+      date_heure: c.date_heure,
+      statut_realisation: c.statut_realisation,
+      statut_planification: c.statut_planification,
+      notes: c.notes,
+    })));
+    let valeur = 0, trajetsAstreinte = 0;
 
     dayCourses.forEach(c => {
-      const estPlanifie = c.statut_planification !== 'non_planifie';
-      const estRealise = c.statut_realisation === 'termine';
-      if (estPlanifie) planifies++;
-      // Meme vocabulaire que le planning et le tableau de bord
-      // (lib/statutCourse) : un trajet remplace et un trajet demarre mais non
-      // cloture ne sont plus noyes dans "non effectues". La colonne Valeur, elle,
-      // ne compte QUE les trajets termines : c'est ce qui est paye, et c'est ce
-      // qui doit reconcilier au centime avec la facture.
-      if (estPlanifie && !estRealise) {
-        switch (etatTrajet({ date_heure: c.date_heure, statut_realisation: c.statut_realisation })) {
-          case 'remplace': remplaces++; break;
-          case 'demarre': aCloturer++; break;
-          case 'a_venir': break;                 // l'heure n'est pas passee
-          default: nonEffectues++; break;
-        }
-      }
-      if (!estPlanifie && estRealise) nonPlanifiesEffectues++;
-      if (!estRealise) return;
-
-      effectues++;
+      if (etatTrajet({ date_heure: c.date_heure, statut_realisation: c.statut_realisation }) !== 'effectue') return;
+      if (c.is_astreinte) trajetsAstreinte++;
       valeur += c.montant || 0;
       const plage = plageDe(c, plages, isFerie);
       const key = colonneKey(plage, c, isFerie, mParts(c.date_heure).dow);
@@ -279,12 +279,13 @@ export function buildRecapMensuel(params: {
       heuresSaisies,
       nbAstreintes: nbSessions,
       valeurAstreinte,
-      planifies,
-      nonEffectues,
-      remplaces,
-      aCloturer,
-      nonPlanifiesEffectues,
-      effectues,
+      planifies: comptes.planifies,
+      nonEffectues: comptes.nonEffectues,
+      remplaces: comptes.remplaces,
+      aCloturer: comptes.demarres,
+      remplacements: comptes.remplacements,
+      effectues: comptes.effectues,
+      trajetsAstreinte,
       parPlage,
       valeur,
       complementGreve: complements[date] || 0,
@@ -296,7 +297,7 @@ export function buildRecapMensuel(params: {
   const totaux: RecapTotaux = {
     minutesAstreinte: 0, minutesPlanifiees: 0, nbAstreintes: 0, valeurAstreinte: 0,
     planifies: 0, nonEffectues: 0, remplaces: 0, aCloturer: 0,
-    nonPlanifiesEffectues: 0, effectues: 0, parPlage: {}, valeur: 0, complementGreve: 0,
+    remplacements: 0, effectues: 0, trajetsAstreinte: 0, parPlage: {}, valeur: 0, complementGreve: 0,
   };
   jours.forEach(j => {
     totaux.minutesAstreinte += j.minutesAstreinte;
@@ -307,8 +308,9 @@ export function buildRecapMensuel(params: {
     totaux.nonEffectues += j.nonEffectues;
     totaux.remplaces += j.remplaces;
     totaux.aCloturer += j.aCloturer;
-    totaux.nonPlanifiesEffectues += j.nonPlanifiesEffectues;
+    totaux.remplacements += j.remplacements;
     totaux.effectues += j.effectues;
+    totaux.trajetsAstreinte += j.trajetsAstreinte;
     totaux.valeur += j.valeur;
     totaux.complementGreve += j.complementGreve;
     colonnesTriees.forEach(col => {

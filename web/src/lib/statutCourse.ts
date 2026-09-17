@@ -17,11 +17,23 @@
 // Ces definitions sont utilisees par le planning, le tableau de bord, les
 // graphiques et les statistiques par ligne : les chiffres doivent concorder
 // d'un ecran a l'autre.
+//
+// Complement du 17/09/2026 (ticket "les chiffres ne sont pas bons", exemples de
+// la L3 les 01/08 et 11/08) :
+//
+//   - La course creee pour le REMPLACANT n'est pas un trajet planifie de plus :
+//     c'est le meme trajet, assure par un autre. Le 01/08 : 89 planifies et non
+//     102 ; le 11/08 : 155 et non 157.
+//   - Trajets EFFECTUES = planifies - non effectues - remplaces + remplacements
+//     (le 01/08 : 89 - 14 - 13 + 13 = 75). Un remplacement ne compte donc que
+//     s'il a eu lieu ; un remplacant qui ne part jamais laisse le trajet NON
+//     EFFECTUE.
 
 export interface CourseStatut {
   date_heure: string;
   statut?: string | null;
   statut_realisation?: string | null;
+  statut_planification?: string | null;
   notes?: string | null;
 }
 
@@ -32,8 +44,16 @@ export type EtatTrajet =
   | 'non_effectue'  // programme, jamais parti (ou annule / incident)
   | 'a_venir';      // programme, l'heure n'est pas encore passee
 
-/** Marqueur pose par le planning sur la course creee pour le remplacant. */
+/**
+ * Course creee pour le remplacant (planning ou appli coordinateur) : elle est
+ * posee "non planifiee" avec la note "[Remplacement]".
+ *
+ * Le statut de planification fait foi quand il est connu : la duplication d'une
+ * semaine recopie la note "[Remplacement]" sur des courses redevenues de vrais
+ * trajets planifies (353 en base au 17/09), qui ne sont pas des remplacements.
+ */
 export function estRemplacement(c: CourseStatut): boolean {
+  if (c.statut_planification) return c.statut_planification === 'non_planifie';
   return (c.notes || '').startsWith('[Remplacement]');
 }
 
@@ -57,7 +77,7 @@ export function aEuLieu(c: CourseStatut, maintenant?: number): boolean {
 }
 
 export interface CompteTrajets {
-  /** Tous les trajets de la selection. */
+  /** Trajets du planning, hors courses creees pour les remplacants. */
   planifies: number;
   /** Termines par le chauffeur. */
   termines: number;
@@ -71,7 +91,7 @@ export interface CompteTrajets {
   nonEffectues: number;
   /** Colonne demandee par la direction : non effectues + remplaces. */
   nonEffectuesOuRemplaces: number;
-  /** Trajets assures A LA PLACE d'un autre chauffeur. */
+  /** Trajets assures A LA PLACE d'un autre chauffeur (ayant eu lieu). */
   remplacements: number;
   /** Trajets a venir (heure pas encore passee). */
   aVenir: number;
@@ -81,9 +101,13 @@ export interface CompteTrajets {
 
 export function compterTrajets(courses: CourseStatut[], maintenant: number = Date.now()): CompteTrajets {
   let termines = 0, demarres = 0, remplaces = 0, nonEffectues = 0, aVenir = 0, remplacements = 0;
+  let planifies = 0;
   for (const c of courses) {
-    if (estRemplacement(c)) remplacements++;
-    switch (etatTrajet(c, maintenant)) {
+    const rempl = estRemplacement(c);
+    if (!rempl) planifies++;
+    const etat = etatTrajet(c, maintenant);
+    if (rempl && (etat === 'effectue' || etat === 'demarre')) remplacements++;
+    switch (etat) {
       case 'effectue': termines++; break;
       case 'demarre': demarres++; break;
       case 'remplace': remplaces++; break;
@@ -91,7 +115,6 @@ export function compterTrajets(courses: CourseStatut[], maintenant: number = Dat
       default: aVenir++; break;
     }
   }
-  const planifies = courses.length;
   const nonEffectuesOuRemplaces = nonEffectues + remplaces;
   return {
     planifies,

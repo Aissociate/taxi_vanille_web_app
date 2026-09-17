@@ -26,6 +26,7 @@ import {
   DatabaseBackup,
 } from 'lucide-react';
 import { useState } from 'react';
+import { accesPage, libelleRole, type Role } from '../lib/roles';
 
 export type Page =
   | 'dashboard'
@@ -54,6 +55,8 @@ interface SidebarProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
   onSignOut: () => void;
+  /** Role de l'utilisateur : seules ses pages sont proposees. */
+  role?: Role;
 }
 
 const mainItems = [
@@ -82,8 +85,10 @@ const paramItems = [
   { id: 'param-sauvegardes' as Page, label: 'Sauvegardes', icon: DatabaseBackup },
 ];
 
-export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
+export function Sidebar({ currentPage, onNavigate, onSignOut, role = 'administrateur' }: SidebarProps) {
   const [paramOpen, setParamOpen] = useState(currentPage.startsWith('param-'));
+  const estAdmin = role === 'administrateur';
+  const itemsVisibles = mainItems.filter(i => accesPage(role, i.id));
 
   return (
     <aside className="w-64 bg-gray-950 text-white flex flex-col h-screen fixed left-0 top-0 z-40">
@@ -102,7 +107,7 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto scrollbar-thin py-3 px-3 space-y-0.5">
-        {mainItems.map((item) => {
+        {itemsVisibles.map((item) => {
           const isActive = currentPage === item.id;
           return (
             <button
@@ -123,7 +128,8 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
           );
         })}
 
-        {/* Parametrage section */}
+        {/* Parametrage section (administrateurs) */}
+        {estAdmin && (
         <div className="pt-3 mt-2 border-t border-white/[0.06]">
           <button
             onClick={() => setParamOpen(!paramOpen)}
@@ -162,6 +168,7 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
             </div>
           </div>
         </div>
+        )}
       </nav>
 
       {/* Footer */}
@@ -186,6 +193,10 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
           <span className="flex-1">App Timer</span>
           <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
         </a>
+        {!estAdmin && (
+          <p className="px-3 pb-1 text-[10px] text-gray-500">Role : {libelleRole(role)}</p>
+        )}
+        {estAdmin && (
         <button
           onClick={() => onNavigate('debug-ai')}
           className={`group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 ${
@@ -197,6 +208,7 @@ export function Sidebar({ currentPage, onNavigate, onSignOut }: SidebarProps) {
           <Bot className="w-[18px] h-[18px]" />
           DebugAI
         </button>
+        )}
         <button
           onClick={onSignOut}
           className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-gray-500 hover:text-red-400 hover:bg-red-500/[0.06] transition-all duration-150"

@@ -1115,8 +1115,30 @@ export function PlanningPage({ user }: PlanningPageProps) {
   const estCloturable = (c: Course) => !c.is_brouillon
     && !['termine', 'terminee', 'remplace', 'annule', 'annulee', 'incident'].includes(c.statut_realisation || '');
 
+  // Courses de remplacement rattachees a un trajet (meme horaire, trajet, ligne).
+  const remplacantsDe = (c: Course) => courses.filter(r =>
+    r.id !== c.id && estRemplacement(r)
+    && r.date_heure === c.date_heure && r.depart === c.depart && r.arrivee === c.arrivee
+    && (r.ligne_id || '') === (c.ligne_id || ''));
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Un trajet REMPLACE que l'on remet en service : la course du remplacant
+    // doit disparaitre, sinon elle reste seule au planning, marquee
+    // "remplacement" sans savoir de qui, et compte comme non effectuee (ligne
+    // D13 du 10/09 16:50 : remplacement saisi a 16:37 par l'appli coordinateur,
+    // trajet d'origine remis "programme" a 18:28 et fait par D9).
+    let remplacantsASupprimer: Course[] = [];
+    if (editingCourse && (editingCourse.statut_realisation || '') === 'remplace' && form.statut_realisation !== 'remplace') {
+      const lies = remplacantsDe(editingCourse);
+      const partis = lies.filter(r => ['en_cours', 'termine', 'terminee'].includes(r.statut_realisation || ''));
+      if (partis.length > 0) {
+        if (!confirm(`Attention : ${partis.map(r => libelleChauffeur(r.chauffeur_id) || 'le remplacant').join(', ')} a deja demarre ou termine ce trajet en remplacement. Le remettre en service le comptera deux fois. Continuer quand meme ?`)) return;
+      }
+      remplacantsASupprimer = lies.filter(r => !partis.includes(r));
+      if (remplacantsASupprimer.length > 0
+        && !confirm(`Ce trajet etait remplace par ${remplacantsASupprimer.map(r => libelleChauffeur(r.chauffeur_id) || 'un chauffeur').join(', ')}. Le remplacement va etre supprime. Continuer ?`)) return;
+    }
     const payload = {
       ...form,
       // L'heure saisie est une heure de Mayotte (offset fixe), pas l'heure du
@@ -1132,6 +1154,11 @@ export function PlanningPage({ user }: PlanningPageProps) {
       const { error, count } = await supabase.from('courses').update(payload, { count: 'exact' }).eq('id', editingCourse.id);
       if (error) { alert(`Enregistrement impossible : ${error.message}`); return; }
       if (!count) { alert('Enregistrement impossible : course introuvable ou droits insuffisants.'); return; }
+      for (const r of remplacantsASupprimer) {
+        const { error: delErr } = await supabase.from('courses').delete().eq('id', r.id);
+        if (delErr) { alert(`Le remplacement de ${libelleChauffeur(r.chauffeur_id)} n'a pas pu etre supprime : ${delErr.message}`); continue; }
+        await logAction('delete', 'courses', r.id, `Remplacement annule (trajet d'origine remis en service) : ${libelleChauffeur(r.chauffeur_id)} (${r.depart} → ${r.arrivee})`, r as unknown as Record<string, unknown>, null);
+      }
       const chauffeur = chauffeurs.find(c => c.id === form.chauffeur_id);
       await logAction('update', 'courses', editingCourse.id, `Course modifiee: ${form.depart} → ${form.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, editingCourse as unknown as Record<string, unknown>, payload);
     } else {
@@ -1154,7 +1181,17 @@ export function PlanningPage({ user }: PlanningPageProps) {
 
   async function handleDeleteCourse() {
     if (!editingCourse) return;
-    if (!confirm('Supprimer cette course ?')) return;
+    // Supprimer la course d'un remplacant : le trajet d'origine, reste
+    // "remplace", n'aurait plus personne pour l'assurer.
+    const origines = estRemplacement(editingCourse)
+      ? courses.filter(o => o.id !== editingCourse.id && (o.statut_realisation || '') === 'remplace'
+        && o.date_heure === editingCourse.date_heure && o.depart === editingCourse.depart
+        && o.arrivee === editingCourse.arrivee && (o.ligne_id || '') === (editingCourse.ligne_id || '')
+        && remplacantsDe(o).length === 1)
+      : [];
+    if (origines.length > 0) {
+      if (!confirm(`Supprimer ce remplacement ? Le trajet de ${origines.map(o => libelleChauffeur(o.chauffeur_id)).join(', ')} sera remis en "programme".`)) return;
+    } else if (!confirm('Supprimer cette course ?')) return;
     // On controle le resultat: sans ca, un echec RLS (course appartenant a un
     // autre compte) renvoyait un succes avec 0 ligne supprimee, la modale se
     // fermait et la course reapparaissait sans aucun message.
@@ -1164,6 +1201,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
       .eq('id', editingCourse.id);
     if (error) { alert(`Suppression impossible : ${error.message}`); return; }
     if (!count) { alert('Suppression impossible : course introuvable ou droits insuffisants.'); return; }
+    for (const o of origines) {
+      await supabase.from('courses').update({ statut_realisation: 'programme' }).eq('id', o.id).eq('statut_realisation', 'remplace');
+      await logAction('update', 'courses', o.id, `Remplacement supprime : trajet remis en service (${libelleChauffeur(o.chauffeur_id)})`, o as unknown as Record<string, unknown>, { statut_realisation: 'programme' });
+    }
     const chauffeur = chauffeurs.find(c => c.id === editingCourse.chauffeur_id);
     await logAction('delete', 'courses', editingCourse.id, `Course supprimee: ${editingCourse.depart} → ${editingCourse.arrivee}${chauffeur ? ` (${chauffeur.prenom} ${chauffeur.nom})` : ''}`, editingCourse as unknown as Record<string, unknown>, null);
     setShowForm(false);
@@ -2489,7 +2530,16 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             </span>
                           )}
                           {!liensRemplacement.remplaceDe.has(course.id) && estRemplacement(course) && (
-                            <span className="block text-[10px] text-amber-600" title="Trajet assure a la place d'un autre chauffeur (chauffeur remplace non retrouve)">remplacement</span>
+                            <span className="block text-[10px] text-red-600 font-medium" title="Aucun trajet 'remplace' ne correspond : le trajet d'origine a ete remis en service apres le remplacement. Supprimez ce remplacement s'il n'a pas eu lieu.">
+                              remplacement sans trajet d'origine (doublon ?)
+                            </span>
+                          )}
+                          {estRemplacement(course) && (
+                            <span className="block text-[10px] text-gray-400">
+                              {course.coordinateur_id
+                                ? `saisi par le coordinateur ${libelleChauffeur(course.coordinateur_id) || ''} (appli)`
+                                : 'saisi depuis le planning'}
+                            </span>
                           )}
                         </td>
                         <td className="px-3 py-2">{li && <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium" style={{ backgroundColor: li.couleur || '#6b7280' }}>{li.code}</span>}</td>

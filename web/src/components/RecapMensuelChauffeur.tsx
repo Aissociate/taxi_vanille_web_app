@@ -76,8 +76,8 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
   };
 
   const enTetes = [
-    'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Planifies', 'Non effectues',
-    'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
+    'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte (EUR)', 'Trajets astreinte', 'Planifies', 'Non effectues',
+    'Remplaces', 'A cloturer', 'Remplacements', 'Effectues',
     ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
     'Valeur', 'Complement greve',
   ];
@@ -89,7 +89,8 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
         j.libelle.split(' ')[0], j.date, j.jourSemaine,
         formatHeures(j.minutesAstreinte),
         Math.round(j.valeurAstreinte * 100) / 100,
-        j.planifies, j.nonEffectues, j.remplaces, j.aCloturer, j.nonPlanifiesEffectues, j.effectues,
+        j.trajetsAstreinte,
+        j.planifies, j.nonEffectues, j.remplaces, j.aCloturer, j.remplacements, j.effectues,
         ...colonnes.map(c => j.parPlage[c.key] || 0),
         Math.round(j.valeur * 100) / 100,
         Math.round(j.complementGreve * 100) / 100,
@@ -99,7 +100,8 @@ export function RecapMensuelChauffeur({ titre, moisLabel, recap, pied, onComplem
       'TOTAL', '', '',
       formatHeures(totaux.minutesAstreinte),
       Math.round(totaux.valeurAstreinte * 100) / 100,
-      totaux.planifies, totaux.nonEffectues, totaux.remplaces, totaux.aCloturer, totaux.nonPlanifiesEffectues, totaux.effectues,
+      totaux.trajetsAstreinte,
+      totaux.planifies, totaux.nonEffectues, totaux.remplaces, totaux.aCloturer, totaux.remplacements, totaux.effectues,
       ...colonnes.map(c => totaux.parPlage[c.key] || 0),
       Math.round(totaux.valeur * 100) / 100,
       Math.round(totaux.complementGreve * 100) / 100,
@@ -165,7 +167,7 @@ ${buildRecapHtml({
       <div className="flex items-center justify-between px-4 py-3">
         <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 text-xs font-bold text-gray-500 uppercase hover:text-gray-700">
           {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          Recap mensuel jour par jour ({jours.length} jours — {totaux.effectues} trajets realises)
+          Recap mensuel jour par jour ({jours.length} jours — {totaux.effectues} trajets effectues)
         </button>
         <div className="flex gap-2">
           <button onClick={exportPdf} title="Version imprimable (Enregistrer en PDF)" className="px-2.5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-50 flex items-center gap-1.5">
@@ -191,12 +193,13 @@ ${buildRecapHtml({
                   <th className="px-2 py-2 text-center font-semibold" title="Numero du jour dans la semaine (1 = lundi)">N°</th>
                   <th className="px-2 py-2 text-center font-semibold" title="Heures d'astreinte : creneau planifie, modifiable a la main">H. astreinte</th>
                   <th className="px-2 py-2 text-right font-semibold">Astreinte</th>
-                  <th className="px-2 py-2 text-center font-semibold">Planifies</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Trajets termines pendant un creneau d'astreinte, payes au tarif astreinte">Trajets astr.</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Trajets du planning, hors courses creees pour un remplacant">Planifies</th>
                   <th className="px-2 py-2 text-center font-semibold" title="Trajets programmes jamais partis, non remplaces (ou annules / en incident)">Non effectues</th>
                   <th className="px-2 py-2 text-center font-semibold" title="Trajets repris par un remplacant : assures, mais pas par ce chauffeur - donc non payes ici">Remplaces</th>
                   <th className="px-2 py-2 text-center font-semibold" title="Trajets demarres et jamais clotures : ils ont eu lieu, mais ils ne sont PAS payes tant qu'ils ne sont pas clotures">A cloturer</th>
-                  <th className="px-2 py-2 text-center font-semibold">Non planif. effectues</th>
-                  <th className="px-2 py-2 text-center font-semibold">Effectues</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Trajets assures a la place d'un autre chauffeur">Remplacements</th>
+                  <th className="px-2 py-2 text-center font-semibold" title="Trajets qui ont eu lieu : planifies - non effectues - remplaces + remplacements. Ceux a cloturer y sont, mais ne sont pas payes">Effectues</th>
                   {colonnes.map(c => (
                     <th key={c.key} className="px-2 py-2 text-center font-semibold" title={`${c.tarif.toFixed(2)} EUR / trajet`}>
                       {c.libelle}
@@ -242,11 +245,12 @@ ${buildRecapHtml({
                       />
                     </td>
                     <td className="px-2 py-1.5 text-right text-gray-700">{j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
+                    <td className={`px-2 py-1.5 text-center ${j.trajetsAstreinte > 0 ? 'text-gray-800 font-semibold' : 'text-gray-400'}`}>{j.trajetsAstreinte || ''}</td>
                     <td className="px-2 py-1.5 text-center text-gray-700">{j.planifies || ''}</td>
                     <td className={`px-2 py-1.5 text-center ${j.nonEffectues > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>{j.nonEffectues || ''}</td>
                     <td className={`px-2 py-1.5 text-center ${j.remplaces > 0 ? 'text-amber-700 font-semibold' : 'text-gray-400'}`}>{j.remplaces || ''}</td>
                     <td className={`px-2 py-1.5 text-center ${j.aCloturer > 0 ? 'text-orange-600 font-semibold' : 'text-gray-400'}`}>{j.aCloturer || ''}</td>
-                    <td className={`px-2 py-1.5 text-center ${j.nonPlanifiesEffectues > 0 ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}>{j.nonPlanifiesEffectues || ''}</td>
+                    <td className={`px-2 py-1.5 text-center ${j.remplacements > 0 ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}>{j.remplacements || ''}</td>
                     <td className="px-2 py-1.5 text-center font-semibold text-gray-800">{j.effectues || ''}</td>
                     {colonnes.map(c => (
                       <td key={c.key} className="px-2 py-1.5 text-center text-gray-600">{j.parPlage[c.key] || ''}</td>
@@ -264,7 +268,7 @@ ${buildRecapHtml({
                   </tr>
                   {jourOuvert === j.date && trajets && (
                     <tr className="bg-amber-50/40">
-                      <td colSpan={11 + colonnes.length + 2} className="px-3 py-2">
+                      <td colSpan={12 + colonnes.length + 2} className="px-3 py-2">
                         {trajetsDuJour(j.date).length === 0 ? (
                           <p className="text-[11px] text-gray-400 italic">Aucun trajet ce jour.</p>
                         ) : (
@@ -312,11 +316,12 @@ ${buildRecapHtml({
                   <td></td>
                   <td className="px-2 py-2 text-center font-mono">{formatHeures(totaux.minutesAstreinte)}</td>
                   <td className="px-2 py-2 text-right">{eur(totaux.valeurAstreinte)}</td>
+                  <td className="px-2 py-2 text-center">{totaux.trajetsAstreinte}</td>
                   <td className="px-2 py-2 text-center">{totaux.planifies}</td>
                   <td className="px-2 py-2 text-center">{totaux.nonEffectues}</td>
                   <td className="px-2 py-2 text-center">{totaux.remplaces}</td>
                   <td className="px-2 py-2 text-center">{totaux.aCloturer}</td>
-                  <td className="px-2 py-2 text-center">{totaux.nonPlanifiesEffectues}</td>
+                  <td className="px-2 py-2 text-center">{totaux.remplacements}</td>
                   <td className="px-2 py-2 text-center">{totaux.effectues}</td>
                   {colonnes.map(c => (
                     <td key={c.key} className="px-2 py-2 text-center">{totaux.parPlage[c.key] || 0}</td>

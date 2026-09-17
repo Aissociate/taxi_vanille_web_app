@@ -49,8 +49,8 @@ export function buildRecapHtml(params: {
   const { colonnes, jours, totaux } = recap;
 
   const enTetes = [
-    'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte', 'Planifies', 'Non effectues',
-    'Remplaces', 'A cloturer', 'Non planifies effectues', 'Effectues',
+    'Jour', 'Date', 'N°', 'H. astreinte', 'Astreinte', 'Trajets astreinte', 'Planifies', 'Non effectues',
+    'Remplaces', 'A cloturer', 'Remplacements', 'Effectues',
     ...colonnes.map(c => `${c.libelle} (${c.tarif.toFixed(2)})`),
     'Valeur', 'Compl. greve',
   ];
@@ -60,9 +60,10 @@ export function buildRecapHtml(params: {
     <td>${esc(j.libelle)}</td><td>${esc(j.date)}</td><td class="c">${j.jourSemaine}</td>
     <td class="c">${formatHeures(j.minutesAstreinte)}</td>
     <td class="r">${j.valeurAstreinte ? eur(j.valeurAstreinte) : ''}</td>
+    <td class="c">${j.trajetsAstreinte || ''}</td>
     <td class="c">${j.planifies}</td><td class="c">${j.nonEffectues}</td>
     <td class="c">${j.remplaces}</td><td class="c">${j.aCloturer}</td>
-    <td class="c">${j.nonPlanifiesEffectues}</td><td class="c">${j.effectues}</td>
+    <td class="c">${j.remplacements}</td><td class="c">${j.effectues}</td>
     ${colonnes.map(c => `<td class="c">${j.parPlage[c.key] || 0}</td>`).join('')}
     <td class="r">${eur(j.valeur)}</td><td class="r">${j.complementGreve ? eur(j.complementGreve) : ''}</td>
   </tr>`).join('');
@@ -70,9 +71,10 @@ export function buildRecapHtml(params: {
   const tot = `<tr class="tot"><td colspan="3">TOTAL</td>
     <td class="c">${formatHeures(totaux.minutesAstreinte)}</td>
     <td class="r">${eur(totaux.valeurAstreinte)}</td>
+    <td class="c">${totaux.trajetsAstreinte}</td>
     <td class="c">${totaux.planifies}</td><td class="c">${totaux.nonEffectues}</td>
     <td class="c">${totaux.remplaces}</td><td class="c">${totaux.aCloturer}</td>
-    <td class="c">${totaux.nonPlanifiesEffectues}</td><td class="c">${totaux.effectues}</td>
+    <td class="c">${totaux.remplacements}</td><td class="c">${totaux.effectues}</td>
     ${colonnes.map(c => `<td class="c">${totaux.parPlage[c.key] || 0}</td>`).join('')}
     <td class="r">${eur(totaux.valeur)}</td><td class="r">${eur(totaux.complementGreve)}</td></tr>`;
 

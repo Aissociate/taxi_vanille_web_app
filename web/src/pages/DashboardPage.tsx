@@ -2,7 +2,9 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { downloadSpreadsheet, type CellValue } from '../lib/spreadsheetExport';
 import { StatsGraphiques } from '../components/StatsGraphiques';
+import { ControleDepartsGPS } from '../components/ControleDepartsGPS';
 import { compterTrajets } from '../lib/statutCourse';
+import { chargerTout, chargerCorrections, appliquerCorrections, dureeExecution, dureeValide, type ExecutionTrajet } from '../lib/dashboardData';
 import { AlertTriangle, Volume2, RefreshCw, X, Download, TrendingUp, TrendingDown, ChevronLeft, ChevronRight } from 'lucide-react';
 
 type PeriodMode = 'jour' | 'semaine' | 'mois';
@@ -12,6 +14,7 @@ interface CourseRow {
   date_heure: string;
   statut_realisation: string;
   statut: string;
+  statut_planification: string | null;
   chauffeur_id: string | null;
   montant: number;
   duree_minutes: number | null;
@@ -56,8 +59,9 @@ export function DashboardPage() {
   const [lignes, setLignes] = useState<LigneRow[]>([]);
   const [selectedLigne, setSelectedLigne] = useState<string>('all');
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [executions, setExecutions] = useState<Array<{ id: string; course_id: string; heure_debut: string; heure_fin: string | null }>>([]);
-  const [arretExecs, setArretExecs] = useState<Array<{ id: string; course_execution_id: string; montants: number; descendants: number }>>([]);
+  // Executions de l'appli chauffeur, corrections "Stats par ligne" appliquees.
+  const [executions, setExecutions] = useState<ExecutionTrajet[]>([]);
+  const [exclus, setExclus] = useState<Set<string>>(new Set());
   const [tarifPlages, setTarifPlages] = useState<Array<{ type_jour: string; heure_debut: string; heure_fin: string; tarif: number; ligne_id: string | null }>>([]);
   const [showBanner, setShowBanner] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -118,15 +122,20 @@ export function DashboardPage() {
     setLoading(true);
     setFetchError(null);
     try {
-      const [cRes, prevRes, chRes, lRes, incRes, execRes, tpRes] = await Promise.all([
-        supabase.from('courses')
-          .select('id, date_heure, statut_realisation, statut, chauffeur_id, montant, duree_minutes, notes, ligne_id, depart, passagers_depart, passagers_arrivee')
+      const cols = 'id, date_heure, statut_realisation, statut, statut_planification, chauffeur_id, montant, duree_minutes, notes, ligne_id, depart, passagers_depart, passagers_arrivee';
+      // Tout est pagine : une semaine toutes lignes depasse les 1000 lignes que
+      // Supabase renvoie au maximum, et la coupe se faisait sans aucune erreur.
+      const [coursesData, prevData, chRes, lRes, incRes, execData, tpRes, corrections] = await Promise.all([
+        chargerTout<CourseRow>((from, to) => supabase.from('courses').select(cols)
           .gte('date_heure', periodStart.toISOString())
-          .lte('date_heure', periodEnd.toISOString()),
-        supabase.from('courses')
-          .select('id, date_heure, statut_realisation, statut, chauffeur_id, montant, duree_minutes, notes, ligne_id')
+          .lte('date_heure', periodEnd.toISOString())
+          .order('date_heure').order('id')
+          .range(from, to)),
+        chargerTout<CourseRow>((from, to) => supabase.from('courses').select(cols)
           .gte('date_heure', prevStart.toISOString())
-          .lte('date_heure', prevEnd.toISOString()),
+          .lte('date_heure', prevEnd.toISOString())
+          .order('date_heure').order('id')
+          .range(from, to)),
         supabase.from('chauffeurs').select('id, code, nom, prenom, ligne_id').eq('statut', 'actif'),
         supabase.from('lignes').select('id, nom, code, depart').eq('active', true),
         supabase.from('courses')
@@ -134,36 +143,28 @@ export function DashboardPage() {
           .eq('statut_realisation', 'incident')
           .gte('date_heure', new Date(now.getTime() - 30 * 86400000).toISOString())
           .order('date_heure', { ascending: false }),
-        supabase.from('course_executions')
-          .select('id, course_id, heure_debut, heure_fin')
+        chargerTout<ExecutionTrajet>((from, to) => supabase.from('course_executions')
+          .select('course_id, heure_debut, heure_fin')
           .gte('heure_debut', periodStart.toISOString())
-          .lte('heure_debut', periodEnd.toISOString()),
+          .lte('heure_debut', periodEnd.toISOString())
+          .order('heure_debut').order('id')
+          .range(from, to)),
         supabase.from('tarif_plages').select('type_jour, heure_debut, heure_fin, tarif, ligne_id'),
+        chargerCorrections(periodStart.toISOString(), periodEnd.toISOString()),
       ]);
 
-      const hasError = [cRes, prevRes, chRes, lRes, incRes, execRes, tpRes].some(r => r.error);
-      if (hasError) {
+      if ([chRes, lRes, incRes, tpRes].some(r => r.error)) {
         setFetchError('Erreur de chargement des donnees depuis le serveur.');
       }
 
-      const execData = execRes.data || [];
-      const execIds = execData.map(e => e.id);
-
-      let arretData: Array<{ id: string; course_execution_id: string; montants: number; descendants: number }> = [];
-      if (execIds.length > 0) {
-        const { data } = await supabase.from('arret_executions')
-          .select('id, course_execution_id, montants, descendants')
-          .in('course_execution_id', execIds);
-        arretData = data || [];
-      }
-
-      setCourses(cRes.data || []);
-      setPrevCourses(prevRes.data || []);
+      const corr = appliquerCorrections(coursesData, execData, corrections);
+      setCourses(corr.courses);
+      setPrevCourses(prevData);
       setChauffeurs(chRes.data || []);
       setLignes(lRes.data || []);
       setIncidents(incRes.data || []);
-      setExecutions(execData);
-      setArretExecs(arretData);
+      setExecutions(corr.executions);
+      setExclus(corr.exclus);
       setTarifPlages(tpRes.data || []);
     } catch (err) {
       console.error('Dashboard load error:', err);
@@ -224,11 +225,17 @@ export function DashboardPage() {
   // Ponctualite = retard REEL au depart (heure_debut d'execution vs heure planifiee),
   // et non la duree du trajet (duree_minutes) qui donnait ~0% en permanence.
   const SEUIL_RETARD = 10;
+  // Executions des seuls trajets affiches : la ligne choisie s'applique aussi
+  // aux durees et a la ponctualite (elles portaient sur toutes les lignes).
+  const executionsFiltrees = useMemo(() => {
+    const ids = new Set(filteredCourses.map(c => c.id));
+    return executions.filter(e => ids.has(e.course_id));
+  }, [executions, filteredCourses]);
   const execByCourse = useMemo(() => {
     const m = new Map<string, string>();
-    executions.forEach(e => { if (e.heure_debut && !m.has(e.course_id)) m.set(e.course_id, e.heure_debut); });
+    executionsFiltrees.forEach(e => { if (e.heure_debut && !m.has(e.course_id)) m.set(e.course_id, e.heure_debut); });
     return m;
-  }, [executions]);
+  }, [executionsFiltrees]);
   const coursesAvecDepart = coursesRealisees.filter(c => execByCourse.has(c.id));
   const retards = coursesAvecDepart.filter(c => {
     const debut = new Date(execByCourse.get(c.id)!).getTime();
@@ -274,8 +281,18 @@ export function DashboardPage() {
       for (let h = startH; h <= endH; h++) arr.push({ label: `${h}h`, montant: map[h] || 0 });
       return arr;
     }
+    if (period === 'mois') {
+      // Sur un mois, un point par date (les lundis du mois etaient cumules).
+      const map = new Map<number, number>();
+      coursesRealisees.forEach(c => {
+        const j = new Date(c.date_heure).getDate();
+        map.set(j, (map.get(j) || 0) + tarifForCourse(c));
+      });
+      const nbJours = new Date(periodStart.getFullYear(), periodStart.getMonth() + 1, 0).getDate();
+      return Array.from({ length: nbJours }, (_, i) => ({ label: String(i + 1), montant: map.get(i + 1) || 0 }));
+    }
     return caParJour.map(d => ({ label: d.jour, montant: d.montant }));
-  }, [period, coursesRealisees, caParJour, tarifForCourse]);
+  }, [period, coursesRealisees, caParJour, tarifForCourse, periodStart]);
 
   const maxCa = Math.max(...chartData.map(d => d.montant), 1);
 
@@ -325,13 +342,19 @@ export function DashboardPage() {
   const nbJoursPeriode = Math.max(1, Math.ceil((periodEnd.getTime() - periodStart.getTime()) / 86400000));
   const voyMoyenParJour = nbJoursPeriode > 0 ? nbCoursesRealisees / nbJoursPeriode : 0;
 
-  // Real data from Android executions
-  const totalMontants = arretExecs.reduce((s, a) => s + (a.montants || 0), 0);
-  const totalDescendants = arretExecs.reduce((s, a) => s + (a.descendants || 0), 0);
-  const completedExecs = executions.filter(e => e.heure_fin);
-  const avgRealDuration = completedExecs.length > 0
-    ? completedExecs.reduce((s, e) => s + (new Date(e.heure_fin!).getTime() - new Date(e.heure_debut).getTime()) / 60000, 0) / completedExecs.length
+  // Passagers saisis dans l'appli chauffeur (cumul des arrets, porte par la
+  // course), sur la ligne affichee et corrections comprises.
+  const coursesPassagers = filteredCourses.filter(c => !exclus.has(c.id));
+  const totalMontants = coursesPassagers.reduce((s, c) => s + (c.passagers_depart || 0), 0);
+  const totalDescendants = coursesPassagers.reduce((s, c) => s + (c.passagers_arrivee || 0), 0);
+  // Duree moyenne : les executions aberrantes (demarrage et cloture d'un meme
+  // geste, ou trajet jamais cloture pendant des heures) sont ecartees.
+  const durees = executionsFiltrees.map(dureeExecution).filter((d): d is number => d !== null);
+  const dureesValides = durees.filter(dureeValide);
+  const avgRealDuration = dureesValides.length > 0
+    ? dureesValides.reduce((s, d) => s + d, 0) / dureesValides.length
     : -1;
+  const nbDureesEcartees = durees.length - dureesValides.length;
 
   // Export du tableau de bord : le bouton "Exporter" n'avait aucune action.
   // On sort ce qui est affiche a l'ecran, pour la periode affichee.
@@ -539,8 +562,21 @@ export function DashboardPage() {
               <h3 className="section-label mb-5">
                 Chiffre d'affaire - {period === 'jour' ? 'Heures' : period === 'semaine' ? 'Semaine' : 'Mois'}
               </h3>
-              <div className="h-48 flex items-end gap-1 relative">
+              <div className="h-48 flex items-end gap-1 relative pl-14">
+                {/* Echelle (EUR) : le graphique n'en avait pas. */}
+                {[1, 0.5, 0].map(f => (
+                  <span
+                    key={f}
+                    className="absolute left-0 w-12 text-right text-[10px] text-gray-400 tabular-nums -translate-y-1/2"
+                    style={{ top: `${((180 - f * 160) / 180) * 100}%` }}
+                  >
+                    {Math.round(maxCa * f).toLocaleString('fr-FR')} €
+                  </span>
+                ))}
                 <svg className="w-full h-full" viewBox="0 0 700 180" preserveAspectRatio="none">
+                  {[1, 0.5, 0].map(f => (
+                    <line key={f} x1="0" x2="700" y1={180 - f * 160} y2={180 - f * 160} stroke="#f3f4f6" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                  ))}
                   <defs>
                     <linearGradient id="caGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.12" />
@@ -573,9 +609,9 @@ export function DashboardPage() {
                   })()}
                 </svg>
               </div>
-              <div className="flex justify-between mt-3 px-2">
+              <div className="flex justify-between mt-3 pl-14 pr-2">
                 {chartData.map((d, i) => (
-                  <span key={i} className="text-[11px] text-gray-400 font-medium">{d.label}</span>
+                  <span key={i} className="text-[11px] text-gray-400 font-medium">{chartData.length > 16 && i % 2 ? '' : d.label}</span>
                 ))}
               </div>
             </div>
@@ -639,18 +675,30 @@ export function DashboardPage() {
             <StatCard
               label="Duree moy. reelle"
               value={avgRealDuration > 0 ? `${Math.max(1, Math.round(avgRealDuration))} mn` : '-'}
-              sub={`${completedExecs.length} executions`}
+              sub={`${dureesValides.length} trajets${nbDureesEcartees > 0 ? ` · ${nbDureesEcartees} anomalie(s) ecartee(s)` : ''}`}
             />
             <StatCard label="Courses / jour" value={voyMoyenParJour.toFixed(1)} sub={`${nbJoursPeriode} jours`} />
             <StatCard label="Passagers montes" value={String(totalMontants)} sub="via app chauffeur" highlight={totalMontants > 0} />
             <StatCard label="Passagers descendus" value={String(totalDescendants)} sub="total arrets" />
           </div>
 
+          <ControleDepartsGPS
+            debut={periodStart}
+            fin={periodEnd}
+            ligneId={selectedLigne}
+            lignes={lignes}
+            chauffeurs={chauffeurs}
+            libelle={`${ligneLabel} - ${periodLabel}`}
+          />
+
           {/* Graphiques demandes par la CADEMA : ils suivent la periode et la
               ligne selectionnees en haut de page. */}
           <StatsGraphiques
             courses={filteredCourses}
-            executions={executions}
+            executions={executionsFiltrees}
+            exclus={exclus}
+            periode={period}
+            libelle={`${ligneLabel} - ${periodLabel}`}
             lignes={lignes}
             seuilMinutes={SEUIL_RETARD}
           />

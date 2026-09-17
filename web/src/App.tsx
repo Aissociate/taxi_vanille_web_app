@@ -24,6 +24,9 @@ import { DebugAIPage } from './pages/DebugAIPage';
 import { IncidentsPage } from './pages/IncidentsPage';
 import { TimerPage } from './pages/TimerPage';
 import { BugReportButton } from './components/BugReportButton';
+import { useRole, accesPage, libelleRole } from './lib/roles';
+import { setLectureSeule } from './lib/supabase';
+import { Eye } from 'lucide-react';
 import MobileApp from './mobile/MobileApp';
 import TimerApp from './timer/TimerApp';
 
@@ -78,6 +81,7 @@ function App() {
   }
   const { user, loading, signIn, signUp, signOut } = useAuth();
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const { role } = useRole(user?.id);
 
   if (loading) {
     return (
@@ -94,8 +98,14 @@ function App() {
     return <LoginPage onLogin={signIn} onSignUp={signUp} />;
   }
 
+  // Page fermee au role : retour au tableau de bord. "En lecture" : les
+  // ecritures sont bloquees par le client Supabase.
+  const acces = accesPage(role, currentPage);
+  const page: Page = acces ? currentPage : 'dashboard';
+  setLectureSeule(accesPage(role, page) === 'lecture');
+
   function renderPage() {
-    switch (currentPage) {
+    switch (page) {
       case 'dashboard': return <DashboardPage />;
       case 'planning': return <PlanningPage user={user!} />;
       case 'carte-gps': return <CarteGPSPage />;
@@ -123,9 +133,15 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50/80">
-      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} onSignOut={signOut} />
+      <Sidebar currentPage={page} onNavigate={setCurrentPage} onSignOut={signOut} role={role} />
       <main className="ml-64 p-6 lg:p-8 min-h-screen">
-        <div className="animate-fade-in">
+        {accesPage(role, page) === 'lecture' && (
+          <div className="mb-4 flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-800">
+            <Eye className="w-4 h-4" />
+            Consultation seule : votre role ({libelleRole(role)}) ne permet pas de modifier cette page.
+          </div>
+        )}
+        <div className="animate-fade-in" key={page}>
           {renderPage()}
         </div>
       </main>

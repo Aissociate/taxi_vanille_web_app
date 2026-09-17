@@ -94,10 +94,24 @@ export default function MobileApp() {
     }
   };
 
+  // iPhone : la page est declaree plein ecran (viewport-fit=cover, barre d'etat
+  // translucide). Sans marge, le haut des ecrans passait sous l'encoche et
+  // l'heure, et le bouton Deconnexion devenait inaccessible (ticket du
+  // 17/09/2026). env(safe-area-inset-*) vaut 0 sur Android et sur ordinateur.
+  // L'ecran de connexion n'est volontairement pas touche.
+  const estConnexion = !['/mobile/planning', '/mobile/coordinator'].includes(path) && !/^\/mobile\/course\//.test(path);
+  if (estConnexion) {
+    return (
+      <>
+        <ReadinessBanner />
+        {renderRoute()}
+      </>
+    );
+  }
   return (
-    <>
+    <div style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}>
       <ReadinessBanner />
       {renderRoute()}
-    </>
+    </div>
   );
 }

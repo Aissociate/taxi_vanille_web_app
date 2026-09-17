@@ -380,7 +380,9 @@ export default function MobileCoordinatorPage({ onNavigate }: Props) {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col" style={zoomStyle}>
       <div className="bg-gray-900 text-white p-4">
-        <div className="flex items-center justify-between">
+        {/* flex-wrap : sur un iPhone etroit avec texte agrandi, la rangee de
+            boutons debordait et poussait Deconnexion hors de l'ecran. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <p className="text-[10px] text-white/70">{formatDate()}</p>
             <h1 className="text-xl font-bold">Coordinateur</h1>

@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { Users, Plus, Key, Trash2, X, Shield, Mail, Clock } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
+import { ROLES, type Role } from '../../lib/roles';
 
 interface Props {
   user: User;
@@ -24,10 +25,32 @@ export function UsersPage({ user }: Props) {
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Roles poses (table user_roles) ; absent = administrateur.
+  const [roles, setRoles] = useState<Record<string, Role>>({});
 
   useEffect(() => {
     loadUsers();
+    loadRoles();
   }, []);
+
+  async function loadRoles() {
+    const { data } = await supabase.from('user_roles').select('user_id, role');
+    const m: Record<string, Role> = {};
+    ((data as { user_id: string; role: Role }[] | null) || []).forEach(r => { m[r.user_id] = r.role; });
+    setRoles(m);
+  }
+
+  async function changerRole(u: AppUser, role: Role) {
+    if (u.id === user.id && role !== 'administrateur'
+      && !confirm("Vous allez retirer vos propres droits d'administrateur : vous ne pourrez plus gerer les utilisateurs. Continuer ?")) return;
+    const { error } = await supabase.from('user_roles').upsert(
+      { user_id: u.id, role, updated_at: new Date().toISOString(), updated_by: user.id },
+      { onConflict: 'user_id' },
+    );
+    if (error) { setMessage({ type: 'error', text: `Role non modifie : ${error.message}` }); return; }
+    setRoles(prev => ({ ...prev, [u.id]: role }));
+    setMessage({ type: 'success', text: `${u.email} : ${ROLES.find(r => r.id === role)?.libelle}. Le changement s'applique a sa prochaine ouverture de page.` });
+  }
 
   async function loadUsers() {
     setLoading(true);
@@ -182,6 +205,7 @@ export function UsersPage({ user }: Props) {
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Utilisateur</th>
+                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Cree le</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Derniere connexion</th>
                 <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
@@ -204,6 +228,16 @@ export function UsersPage({ user }: Props) {
                         )}
                       </div>
                     </div>
+                  </td>
+                  <td className="px-5 py-4">
+                    <select
+                      value={roles[u.id] || 'administrateur'}
+                      onChange={e => changerRole(u, e.target.value as Role)}
+                      title={ROLES.find(r => r.id === (roles[u.id] || 'administrateur'))?.description}
+                      className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none"
+                    >
+                      {ROLES.map(r => <option key={r.id} value={r.id}>{r.libelle}</option>)}
+                    </select>
                   </td>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-1.5 text-sm text-gray-600">
