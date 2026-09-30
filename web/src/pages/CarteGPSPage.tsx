@@ -53,6 +53,11 @@ type FilterLigne = 'tous' | string;
 // toutes les 30 s).
 const PING_WINDOW_HOURS = 3;
 
+function appliquerModeSombre(map: L.Map, sombre: boolean) {
+  const tuiles = map.getPane('tilePane');
+  if (tuiles) tuiles.style.filter = sombre ? 'invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9)' : '';
+}
+
 export function CarteGPSPage() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
@@ -148,12 +153,14 @@ export function CarteGPSPage() {
     // flottant "Signaler un bug".
     L.control.zoom({ position: 'topright' }).addTo(map);
 
-    L.tileLayer(
-      darkMode
-        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-        : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-      { attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19 }
-    ).addTo(map);
+    // Fond OpenStreetMap, sans cle. Les fonds CARTO (voyager / dark_all)
+    // exigent desormais une cle API : sans elle, chaque tuile affichait
+    // "API KEY REQUIRED" a la place de Mayotte (ticket du 30/09).
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
+    appliquerModeSombre(map, darkMode);
 
     layersRef.current = L.layerGroup().addTo(map);
     markersRef.current = L.layerGroup().addTo(map);
@@ -162,18 +169,10 @@ export function CarteGPSPage() {
     return () => { map.remove(); mapInstance.current = null; };
   }, [arrets.length]);
 
-  // Update tile layer on dark mode change
+  // Mode sombre : filtre sur les tuiles seules (lignes et chauffeurs gardent
+  // leurs couleurs), plutot qu'un second fournisseur de fond.
   useEffect(() => {
-    if (!mapInstance.current) return;
-    mapInstance.current.eachLayer((layer) => {
-      if (layer instanceof L.TileLayer) layer.remove();
-    });
-    L.tileLayer(
-      darkMode
-        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-        : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-      { attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19 }
-    ).addTo(mapInstance.current);
+    if (mapInstance.current) appliquerModeSombre(mapInstance.current, darkMode);
   }, [darkMode]);
 
   // Draw lines

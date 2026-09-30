@@ -1882,10 +1882,21 @@ export function PlanningPage({ user }: PlanningPageProps) {
                             const isEnRetard = course.statut === 'en_retard';
                             const isEnCours = !isTerminee && !isRemplacee && (isEnRetard || course.statut === 'en_cours' || course.statut_realisation === 'en_cours');
                             const bgColor = isBrouillon ? '#3b82f6' : isRemplacee ? '#f87171' : isNonPlanifie ? '#9ca3af' : (ligne?.couleur || '#d97706');
+                            // Vue jour : "Rempl." restait seul, sans dire par qui
+                            // (ticket du 17/09). Code du remplacant / du remplace
+                            // sur le bloc, nom complet dans l'infobulle.
+                            const remplacantId = liensRemplacement.remplacePar.get(course.id);
+                            const remplaceId = liensRemplacement.remplaceDe.get(course.id);
+                            const codeChauffeur = (id?: string) => chauffeurs.find(x => x.id === id)?.code || '';
                             return (
                               <div
                                 key={course.id}
                                 data-course-id={course.id}
+                                title={[
+                                  `${time} ${course.depart} → ${course.arrivee}`,
+                                  remplacantId ? `Remplace par ${libelleChauffeur(remplacantId)}` : '',
+                                  remplaceId ? `Remplace ${libelleChauffeur(remplaceId)}` : '',
+                                ].filter(Boolean).join(' — ')}
                                 onClick={(e) => { e.stopPropagation(); onCourseClick(course); }}
                                 className={`absolute top-1 bottom-1 rounded cursor-pointer flex items-center px-2 gap-1 text-white text-[10px] font-medium overflow-hidden shadow-sm hover:shadow-md transition-shadow select-none ${isNonPlanifie ? 'border-2 border-dashed border-gray-500' : ''} ${isBrouillon ? 'border-2 border-dashed border-blue-300 opacity-75' : ''} ${isRemplacee ? 'opacity-60' : ''} ${isTerminee ? 'opacity-80 ring-2 ring-emerald-300 ring-inset' : ''} ${isEnCours ? 'ring-2 ring-emerald-400 ring-inset' : ''} ${selectMode && selectedCourseIds.has(course.id) ? 'ring-2 ring-blue-700 ring-offset-1' : ''}`}
                                 style={{ left: pos.left, width: pos.width, minWidth: '80px', backgroundColor: bgColor }}
@@ -1898,7 +1909,10 @@ export function PlanningPage({ user }: PlanningPageProps) {
                                   <span className="bg-white/30 px-1 rounded text-[9px] flex-shrink-0">Brouillon</span>
                                 )}
                                 {isRemplacee && (
-                                  <span className="bg-white/30 px-1 rounded text-[9px] flex-shrink-0">Rempl.</span>
+                                  <span className="bg-white/30 px-1 rounded text-[9px] flex-shrink-0">Rempl.{remplacantId ? ` → ${codeChauffeur(remplacantId)}` : ''}</span>
+                                )}
+                                {remplaceId && (
+                                  <span className="bg-white/30 px-1 rounded text-[9px] flex-shrink-0">a la place de {codeChauffeur(remplaceId)}</span>
                                 )}
                                 {isTerminee && (
                                   <span className="bg-white/90 text-emerald-700 px-1 rounded text-[9px] font-semibold flex-shrink-0">✓ Fait</span>
